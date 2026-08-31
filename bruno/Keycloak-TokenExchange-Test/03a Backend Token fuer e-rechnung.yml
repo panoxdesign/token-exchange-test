@@ -1,0 +1,61 @@
+info:
+  name: 03a Backend Token fuer e-rechnung
+  type: http
+  seq: 3
+
+docs: |
+  Schritt 3. Das Backend nimmt die Assertion aus Request 02 als
+  Autorisierungs-Nachweis (RFC 7523) und stellt ein eigenes Token aus.
+
+  Dieser Request ist identisch mit dem Gegenstueck fuer den anderen Dienst -
+  bis auf den scope. Genau darin liegt die Zuschneidung.
+
+  Was das Backend prueft:
+    1. iss der Assertion  -> findet den Identity Provider "frontend"
+    2. Signatur           -> ueber dessen JWKS URL
+    3. aud                -> muss der eigene Realm-Issuer sein
+    4. jti                -> darf nicht schon verwendet worden sein
+    5. sub                -> muss per Federated Identity auf einen lokalen User zeigen
+
+  Erwartung:
+    iss              http://localhost:8081/realms/Backend-Microservices
+    azp              domain-5678
+    sub              der verlinkte Backend-User - ANDERER Wert als in token1/2
+    aud              e-rechnung
+    resource_access  e-rechnung: reader, writer
+
+  Kein Refresh Token: der Grant erzeugt eine transiente Session (erkennbar am
+  jti-Praefix trrtte:). Laeuft das Token ab, wird die Kette neu durchlaufen.
+
+  Vor jedem Lauf Request 02 neu ausfuehren - Assertions gelten genau einmal,
+  sonst kommt invalid_grant / Token reuse detected.
+
+http:
+  method: POST
+  url: "{{BE_URL}}/realms/{{BE_REALM}}/protocol/openid-connect/token"
+  body:
+    type: form-urlencoded
+    data:
+      - name: grant_type
+        value: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+      - name: assertion
+        value: "{{token2}}"
+      - name: scope
+        value: "{{SVC_ERECHNUNG}}"
+      - name: client_id
+        value: "{{DOMAIN_CLIENT}}"
+      - name: client_secret
+        value: "{{BE_DOMAIN_SECRET}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |
+        bru.setVar("token3", res.body.access_token);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

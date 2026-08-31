@@ -1,0 +1,78 @@
+services:
+  # ---- Frontend Keycloak -----------------------------------------------------
+  frontend-keycloak-db:
+    image: postgres:18
+    shm_size: 128mb
+    volumes:
+      - ./etc/frontend-db/data:/var/lib/postgresql
+    environment:
+      - POSTGRES_DB=keycloak-frontend
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD=keycloak
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak-frontend"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  frontend-keycloak:
+    image: keycloak/keycloak:26.7.2
+    ports:
+      - "8080:8080"
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+      # Fixiert den Issuer der ausgestellten Tokens auf http://localhost:8080/realms/<realm>.
+      # Ohne das leitet Keycloak den Issuer aus dem Host-Header ab, und er wandert je nachdem,
+      # wie man die Instanz aufruft. Der IdP im Backend vergleicht exakt gegen diesen Wert.
+      - KC_HOSTNAME=http://localhost:8080
+      - KC_DB=postgres
+      - KC_DB_URL_HOST=frontend-keycloak-db
+      - KC_DB_URL_DATABASE=keycloak-frontend
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=keycloak
+    depends_on:
+      frontend-keycloak-db:
+        condition: service_healthy
+    command: start-dev
+
+  # ---- Backend Keycloak ------------------------------------------------------
+  backend-keycloak-db:
+    image: postgres:18
+    shm_size: 128mb
+    volumes:
+      - ./etc/backend-db/data:/var/lib/postgresql
+    environment:
+      - POSTGRES_DB=keycloak-backend
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD=keycloak
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak-backend"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  backend-keycloak:
+    image: keycloak/keycloak:26.7.2
+    ports:
+      - "8081:8080"
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+      # 8081, weil diese Instanz von aussen unter localhost:8081 erreichbar ist. Der Wert landet
+      # im Issuer der Backend-Tokens und muss dem aud-Claim der Assertion entsprechen.
+      #
+      # Intern lauscht Keycloak weiter auf 8080. Das Frontend muss das Backend nie erreichen -
+      # nur umgekehrt, fuer den JWKS-Abruf. Deshalb reicht das Mapping 8081:8080.
+      - KC_HOSTNAME=http://localhost:8081
+      - KC_DB=postgres
+      - KC_DB_URL_HOST=backend-keycloak-db
+      - KC_DB_URL_DATABASE=keycloak-backend
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=keycloak
+    depends_on:
+      backend-keycloak-db:
+        condition: service_healthy
+    command: start-dev

@@ -1,0 +1,37 @@
+name: Test
+variables:
+  - name: FE_URL
+    value: http://localhost:8080
+    description: Frontend-Keycloak
+  - name: BE_URL
+    value: http://localhost:8081
+    description: Backend-Keycloak
+  - name: FE_REALM
+    value: frontend
+    description: ""
+  - name: BE_REALM
+    value: Backend-Microservices
+    description: ""
+  - name: BACKEND_ISSUER
+    value: http://localhost:8081/realms/Backend-Microservices
+    description: Issuer des Backends - audience beim Exchange, aud der Assertion
+  - name: ACCESS_SCOPE
+    value: access-backend
+    description: Optionaler Scope im Frontend, aktiviert den Audience-Mapper
+  - name: DOMAIN_CLIENT
+    value: domain-5678
+    description: heisst in beiden Realms gleich, sind aber zwei Clients
+  - name: SVC_ERECHNUNG
+    value: e-rechnung
+    description: ""
+  - name: SVC_FAHRTKOSTEN
+    value: fahrtkostenerstattung
+    description: ""
+  # Lab-Secrets bewusst im Klartext, damit die Collection ohne Nacharbeit laeuft.
+  # Muessen zu den Werten in setup-realms.sh passen.
+  - name: FE_DOMAIN_SECRET
+    value: lab-frontend-domain-5678-secret
+    description: Secret von domain-5678 im Frontend-Realm
+  - name: BE_DOMAIN_SECRET
+    value: lab-backend-domain-5678-secret
+    description: Secret von domain-5678 im Backend-Realm

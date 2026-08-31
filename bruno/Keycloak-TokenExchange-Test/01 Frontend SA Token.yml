@@ -1,0 +1,43 @@
+info:
+  name: 01 Frontend SA Token
+  type: http
+  seq: 1
+
+docs: |
+  Schritt 1. Gewoehnliches Service-Account-Token des Clients domain-5678 im
+  Frontend-Realm.
+
+  Erwartung:
+    iss    http://localhost:8080/realms/frontend
+    azp    domain-5678
+    sub    der Service-Account-User des Clients
+    aud    account          <- das Backend kommt hier noch NICHT vor
+    scope  profile email
+
+  Fuer das Backend ist dieses Token wertlos. Siehe Request 02.
+
+http:
+  method: POST
+  url: "{{FE_URL}}/realms/{{FE_REALM}}/protocol/openid-connect/token"
+  body:
+    type: form-urlencoded
+    data:
+      - name: grant_type
+        value: client_credentials
+      - name: client_id
+        value: "{{DOMAIN_CLIENT}}"
+      - name: client_secret
+        value: "{{FE_DOMAIN_SECRET}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |
+        bru.setVar("token1", res.body.access_token);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
