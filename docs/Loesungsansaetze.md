@@ -1,4 +1,21 @@
+# Autorisierung im Mandantensystem – Referenzdokumentation
+
 > **Zweck dieses Dokuments:** Referenzdokumentation des Autorisierungs-Designs. Es beschreibt den festen Rahmen (Kontext, Token-Aufbau, Grundprinzipien) und die **Bausteine**, aus denen die konkrete Lösung zusammengesetzt wird. Die Bausteine sind nach Funktion gegliedert – nicht als flache Liste konkurrierender „Ansätze", sondern als kombinierbare Teile.
+
+---
+
+## 0. Was zur Entscheidung noch gebraucht wird
+
+Der Lösungsraum ist vollständig beschrieben. Die noch offene Entscheidung (v. a. Wahrheitsquelle A1/A3/A2 und Token-Beschaffung B1/B2) hängt an **Anforderungen und Zahlen, die dieses Dokument nicht selbst liefern kann** und die vor der Entscheidungsrunde eingeholt werden sollten:
+
+1. **Muss Abbuchen sofort wirken?** Wenn ein Mandant einen Service abbucht – muss der Zugriff _sofort_ enden, oder ist ein Nachlauf bis zum Token-Ablauf akzeptabel? (Geschäfts-/Compliance-Frage, oft an Bezahlung/Vertrag gekoppelt.) → entscheidet A1 vs. A3.
+2. **Wie hoch ist die reale Änderungsfrequenz der Buchungen?** Selten (pro Mandant wenige Male im Jahr) oder häufig? → entscheidet, ob „Keycloak als Schreib-DB" (A2/A3) tragbar ist.
+3. **Wie lang sind die Token-Laufzeiten?** Konkrete Zahl. → bestimmt bei A3, wie lange ein abgebuchter Service im Token weiterlebt.
+4. **Gibt es harte Sicherheitsvorgaben zu Least-Privilege?** Ist ein Super-Client (B2) akzeptabel, oder ist Isolation pro Microservice (B1) Pflicht? (Security-/Governance-Entscheidung.)
+
+Zusätzlich sollte **eine Person mit tiefem Keycloak-Wissen** die im Dokument als „setup-abhängig" / „versionsabhängig" markierten Annahmen bestätigen (siehe Abschnitt 6), idealerweise abgesichert durch einen kleinen **Proof of Concept** für die zwei kritischsten Punkte: Down-Scoping bei B2 und Admin-API-Last bei A2/A3.
+
+> Sobald die vier Fragen beantwortet sind, führt die **Entscheidungsmatrix** (Abschnitt 5.1) direkt zu einer Baustein-Kombination.
 
 ---
 
@@ -77,6 +94,7 @@ Man wählt **eine** Variante aus A und **eine** aus B (Ausnahme: A-Variante „A
 | -------- | ------------------------------------ | ---------------- | --------------------------- | ------------------------- |
 | A        | A1 – Lizenz-Service                  | ✅               | ❌                          | Nein – braucht ein B      |
 | A        | A2 – Account pro Mandant             | ✅               | ✅                          | **Ja**                    |
+| A        | A3 – Entitlement-Attribut im Token   | ✅               | ❌                          | Nein – braucht ein B      |
 | B        | B1 – Client pro Microservice + Vault | ❌               | ✅                          | Nein – braucht ein A      |
 | B        | B2 – Super-Client + Down-Scoping     | ❌               | ✅                          | Nein – braucht ein A      |
 | C        | C1 – API-Gateway (Gravitee)          | ❌               | (teilweise)                 | Nein – Durchsetzungspunkt |
@@ -154,6 +172,39 @@ B --> MS : Aufruf
 - Buchen/Abbuchen = Schreibvorgang auf Keycloak-Rollen via Admin-API → koppelt den Buchungsprozess eng an Keycloak-Administration.
 - Hochfrequenter, UI-getriebener Buchungszustand wird in Keycloak-Rollen geführt – Keycloak als Zustandsdatenbank zweckentfremdet.
 - ⚠️ Admin-API-Last bei Massen-Updates und Token-Ausstellung für 1000 Accounts unbedingt vorab per Lasttest prüfen.
+
+### A3 – Entitlement-Attribut im Token
+
+**Beschreibung.** Die Buchungswahrheit lebt als **Attribut `entitlement`** direkt an der Mandanten-Gruppe im **KSP** – dort, wo die Mandanten-Zugehörigkeit ohnehin liegt. Das Attribut enthält die Liste der gebuchten Services des Mandanten. Ein **Mapper** zieht es (wie bereits `domains`) fälschungssicher ins User-Token. Der Broker prüft dann nur noch, ob der angeforderte Microservice im `entitlement`-Claim enthalten ist – **kein externer Service-Call**, die Lizenz reist im Token mit. Buchen/Abbuchen ändert das Gruppen-Attribut per Keycloak-Admin-API.
+
+**Diagramm.**
+
+```plantuml
+@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+node "KSP\nMandanten-Gruppe\nattribut: entitlement" as KSP
+node "Broker (Wächter)" as B
+
+KSP --> B : Token mit entitlement-Claim\n(gebuchte Services des Mandanten)
+note over B : prüft: angeforderter MS\nin entitlement enthalten?\n(kein externer Call)
+@enduml
+```
+
+**Pro**
+
+- Fügt sich in die **bestehende** Mapper-/Gruppen-Mechanik des KSP ein – kein neuer Dienst, keine 1000 Service-Accounts.
+- Lizenz reist im Token mit → **ein** Prüfschritt im Broker, kein Roundtrip zu einem externen Lizenz-Service.
+- Fälschungssicher wie `domains`, da serverseitig aus dem Gruppen-Attribut gemappt.
+
+**Contra**
+
+- **Token-Latenz beim Abbuchen:** Das `entitlement` reist im Token mit; bereits ausgestellte Tokens tragen das alte Entitlement bis zum Ablauf weiter. Ein _abgebuchter_ Service bleibt bis zum Token-Ablauf nutzbar. Bei A1 (Lizenz-Service, pro Request gefragt) wirkt Abbuchen dagegen **sofort**. → relevant, wenn Abbuchen zeitnah/vertraglich greifen muss.
+- Buchen/Abbuchen = Schreibvorgang auf ein Keycloak-Gruppen-Attribut via Admin-API → **Keycloak wird zur Schreib-DB für hochfrequente, UI-getriebene Buchungsdaten** (dieselbe Zweckentfremdung wie bei A2, nur per Attribut statt Rollen).
+- Deckt **nur Achse A** ab – die Token-Beschaffung (Baustein B) bleibt weiterhin offen und muss separat gewählt werden.
+
+> **Einordnung (Meinung):** Für dieses konkrete Setup der **eleganteste** der drei A-Varianten, weil er sich nahtlos in die vorhandene Struktur einfügt und die 1000 Service-Accounts vermeidet. Aber **kein automatischer Gewinner** gegenüber A1: A3 gewinnt bei Einfachheit, A1 bei Aktualität (sofortiges Abbuchen) und dabei, Keycloak nicht zur Buchungs-Schreib-DB zu machen. Die Wahl A3 vs. A1 hängt an zwei fachlich zu klärenden Fragen: (1) Wie schnell muss Abbuchen wirken? (2) Wie hoch ist die reale Änderungsfrequenz der Buchungen?
 
 ---
 
@@ -274,7 +325,7 @@ GW --> B : Antwort
 
 Die konkret vorgesehene Zusammensetzung für dieses System. Komponenten: **SP** (Self-Service-Portal / Frontend), **KSP** (Keycloak SP), **Broker** (Wächter), **Lizenz-Service**, **KMC** (Keycloak Microservice-Seite), **Gravitee** (API-Gateway).
 
-> **Gewählte Bausteine:** A1 (Lizenz-Service) als Wahrheitsquelle. Baustein B (Token-Beschaffung) ist noch **offen** – B1 oder B2 (siehe offene Punkte). C1 (Gravitee) als Durchsetzung.
+> **Gewählte Bausteine:** Wahrheitsquelle noch **offen** – A1 (Lizenz-Service) oder A3 (Entitlement-Attribut); Entscheidung hängt an Abbuch-Sofortwirkung und Änderungsfrequenz (fachlich zu klären). Baustein B (Token-Beschaffung) ebenfalls **offen** – B1 oder B2. C1 (Gravitee) als Durchsetzung. Das folgende Sequenzdiagramm zeigt die A1-Variante (externer Lizenz-Service-Call); bei A3 entfällt dieser Call, stattdessen prüft der Broker den `entitlement`-Claim direkt im Token.
 
 ### 4.1 Ablauf (Sequenzdiagramm)
 
@@ -363,18 +414,53 @@ end note
 
 ## 5. Kurzvergleich der Bausteine
 
-| Baustein                             | Wo liegt die Buchungswahrheit? | Anzahl Accounts | Least Privilege     | Hauptrisiko                               |
-| ------------------------------------ | ------------------------------ | --------------- | ------------------- | ----------------------------------------- |
-| A1 – Lizenz-Service                  | Eigene DB (außerhalb KC)       | –               | –                   | Wird als „nicht KC-zentrisch" hinterfragt |
-| A2 – Account pro Mandant             | Keycloak-Rollen                | ~1000           | hoch                | Admin-API-Last, KC als Zustands-DB        |
-| B1 – Client pro Microservice + Vault | (aus A)                        | N (= Services)  | hoch                | Betriebsaufwand N Accounts/Secrets        |
-| B2 – Super-Client                    | (aus A)                        | 1               | niedrig             | Ein Secret öffnet alles                   |
-| C1 – API-Gateway                     | (aus A)                        | –               | je nach Kombination | Zusätzliche Infra, löst Wahrheit nicht    |
+| Baustein                             | Wo liegt die Buchungswahrheit? | Anzahl Accounts | Least Privilege     | Hauptrisiko                                        |
+| ------------------------------------ | ------------------------------ | --------------- | ------------------- | -------------------------------------------------- |
+| A1 – Lizenz-Service                  | Eigene DB (außerhalb KC)       | –               | –                   | Wird als „nicht KC-zentrisch" hinterfragt          |
+| A2 – Account pro Mandant             | Keycloak-Rollen                | ~1000           | hoch                | Admin-API-Last, KC als Zustands-DB                 |
+| A3 – Entitlement-Attribut            | KSP-Gruppenattribut (im Token) | –               | –                   | Abbuchen erst nach Token-Ablauf; KC als Schreib-DB |
+| B1 – Client pro Microservice + Vault | (aus A)                        | N (= Services)  | hoch                | Betriebsaufwand N Accounts/Secrets                 |
+| B2 – Super-Client                    | (aus A)                        | 1               | niedrig             | Ein Secret öffnet alles                            |
+| C1 – API-Gateway                     | (aus A)                        | –               | je nach Kombination | Zusätzliche Infra, löst Wahrheit nicht             |
+
+### 5.1 Entscheidungsmatrix
+
+Sobald die vier Fragen aus Abschnitt 0 beantwortet sind, führt diese Matrix zu einer Baustein-Kombination.
+
+**Wahrheitsquelle (Achse A):**
+
+| Wenn …                                                                                       | dann                          | weil                                                        |
+| -------------------------------------------------------------------------------------------- | ----------------------------- | ----------------------------------------------------------- |
+| Abbuchen muss **sofort** wirken (Compliance/Bezahlung)                                       | **A1** (Lizenz-Service)       | pro Request gefragt → keine Token-Latenz                    |
+| Abbuchen-Nachlauf bis Token-Ablauf ist **ok** **und** Änderungen eher selten                 | **A3** (Entitlement im Token) | fügt sich in bestehende Mapper-Struktur, kein externer Call |
+| „Alles muss über Keycloak-Rollen laufen" ist harte Vorgabe **und** Account-Zahl beherrschbar | **A2** (Account pro Mandant)  | secure by construction, deckt B mit ab                      |
+| Buchungen ändern sich **häufig** (hohe Schreiblast)                                          | **A1** (nicht A2/A3)          | Keycloak nicht als Schreib-DB für hochfrequente Daten       |
+
+**Token-Beschaffung (Achse B) – entfällt bei A2:**
+
+| Wenn …                                                          | dann                             | weil                                          |
+| --------------------------------------------------------------- | -------------------------------- | --------------------------------------------- |
+| Least-Privilege ist **Pflicht** (Security-Vorgabe)              | **B1** (Client pro Microservice) | ein geleaktes Secret öffnet nur einen Service |
+| Betriebsaufwand minimieren, Super-Client akzeptiert             | **B2** (Super-Client)            | ein Secret, kein Account-Wildwuchs            |
+| Down-Scoping in der Keycloak-Version **nicht** sauber verfügbar | **B1** (nicht B2)                | B2 setzt zuverlässiges Down-Scoping voraus    |
+
+**Durchsetzung (C):** Gravitee ist gesetzt (bereits in der Landschaft) → **C1** in allen Kombinationen.
+
+**Typische resultierende Kombinationen:**
+
+- **A1 + B1 + C1** – maximale Sauberkeit/Aktualität, höchster Betriebsaufwand.
+- **A1 + B2 + C1** – sofortiges Abbuchen, schlanke Token-Beschaffung, Super-Client-Risiko.
+- **A3 + B2 + C1** – schlankste Variante, wenn Abbuch-Nachlauf ok; alles im Token, ein Client.
+- **A2 + C1** – nur wenn „alles über Keycloak" Vorgabe ist und die Account-Zahl akzeptiert wird.
+
+> Die Matrix ersetzt keine fachliche Abwägung – sie macht nur sichtbar, welche Antwort auf die vier Fragen zu welcher Kombination führt. Bei Zielkonflikten (z. B. „sofortiges Abbuchen" **und** „häufige Änderungen" → beide zeigen auf A1, konsistent; aber „alles über Keycloak" **und** „sofortiges Abbuchen" → Konflikt A2 vs. A1, der bewusst entschieden werden muss).
 
 ---
 
 ## 6. Offene Punkte / vor Entscheidung zu klären
 
+- **Wahrheitsquelle-Wahl (A1 vs. A3 vs. A2):** Kernentscheidung. A1 (Lizenz-Service, Abbuchen sofort wirksam, externer Call) vs. A3 (Entitlement im Token, keine externe Abfrage, aber Abbuchen erst nach Token-Ablauf) vs. A2 (1000 Accounts). Hängt an: Wie schnell muss Abbuchen wirken? Wie hoch ist die reale Änderungsfrequenz? → **fachlich zu klären.**
+- **Token-Laufzeiten** (relevant für A3): Bestimmen, wie lange ein abgebuchter Service im Token weiterlebt.
 - **Baustein-B-Wahl (B1 vs. B2):** Least-Privilege vs. Betriebsaufwand.
 - **Keycloak-Version:** Unterstützt sie per-Request-Down-Scoping (für B2) zuverlässig? → kleiner PoC.
 - **Lasttest** falls A2 erwogen wird (1000 Accounts, Massen-Rollen-Updates, Token-Ausstellungsrate).
