@@ -66,8 +66,9 @@ neuen Flows, die im letzten Abschnitt benannt sind.
 - id `b54323e7-8fd1-4071-84ea-2c8a3e2def11`
 - Federated Identity: `frontend` → `userId=8eb1bec2-6c88-4b9a-83fd-d645ee1f2021` (Frontend-`lab-user`),
   `userName=lab-user`
-- Client-Rollen: `e-rechnung`: reader, writer; `fahrtkostenerstattung`: **reader** (nicht `approver` —
-  bewusste Teilmenge, kein „alle Rollen jedes Dienstes")
+- Direkte Client-Rollen: `e-rechnung`: reader, writer; `fahrtkostenerstattung`: **reader** (nicht
+  `approver` — bewusste Teilmenge, kein „alle Rollen jedes Dienstes")
+- **Gruppen-Mitgliedschaft:** `/domain-5678` **und** `/domain-1234` (siehe Abschnitt „Gruppen")
 
 ### User `frontend-domain-5678` (**Altlast F**, verwaist)
 
@@ -79,9 +80,22 @@ neuen Flows, die im letzten Abschnitt benannt sind.
 - Ohne gültige Federated Identity kann kein JWT Authorization Grant mehr an diesen User binden — der
   Eintrag ist reiner Datenmüll
 
-Daneben trägt der Backend-Realm noch zwei Gruppen `domain-5678` und `domain-1234` mit
-Client-Rollen auf `e-rechnung` — sie werden von keinem Grant und keinem Client dieser Kette
-referenziert und sind hier nur der Vollständigkeit halber erwähnt.
+### Gruppen (Mandanten-Modell)
+
+Der Backend-Realm modelliert die Mandanten als Gruppen; jede trägt die dienst-spezifischen
+Client-Rollen ihres Mandanten. Der Ziel-User `lab-user` ist Mitglied **beider** Gruppen.
+
+| Gruppe | Client-Rollen |
+|---|---|
+| `/domain-5678` | `e-rechnung`: writer, reader |
+| `/domain-1234` | `e-rechnung`: reader |
+
+Beide führen aktuell **nur** `e-rechnung`-Rollen (kein `fahrtkostenerstattung`). Die Rollen des
+Ziel-Users kommen damit doppelt — einmal direkt am User, einmal über die Gruppen. Genau diese
+**Vereinigung** über beide Mandanten ist das Problem, das **Mapper 2** (Domain B, noch nicht gebaut)
+lösen soll: anhand des `tenant`-Claims aus token2 genau eine Mitgliedschaft bestätigen und nur deren
+Rollen in token3 ausgeben. `setup-realms.sh` legt Gruppen und Mitgliedschaft seit der Angleichung mit
+an (Arrays `BE_GROUPS` / `TARGET_GROUPS`).
 
 ## Der umgebaute Flow (04 → 05 → 02 → 03)
 

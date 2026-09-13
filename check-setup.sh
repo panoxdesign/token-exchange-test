@@ -24,6 +24,12 @@ IDP_ALIAS="${IDP_ALIAS:-frontend}"
 ACCESS_SCOPE="${ACCESS_SCOPE:-access-backend}"
 TARGET_USER="${TARGET_USER:-lab-user}"
 SERVICES=(e-rechnung fahrtkostenerstattung)
+# Mandanten-Gruppen im Backend:  gruppe:dienst:rolle,rolle  (muss zu setup-realms.sh passen)
+BE_GROUPS=(
+  "domain-5678:e-rechnung:writer,reader"
+  "domain-1234:e-rechnung:reader"
+)
+TARGET_GROUPS="${TARGET_GROUPS:-domain-5678,domain-1234}"
 
 GATEWAY="${GATEWAY:-gateway}"
 SP_CLIENT="${SP_CLIENT:-self-service-portal}"
@@ -382,6 +388,28 @@ else
     RR=$(jq -r --arg c "$SVC" '.clientMappings[$c].mappings // [] | map(.name) | join(", ")' <<<"${RM:-{\}}")
     [ -n "$RR" ] && ok "Rollen auf '$SVC': $RR" \
       || bad "keine Rollen auf '$SVC'" "dann ist resource_access im Token leer"
+  done
+fi
+
+head_ "2. Mandanten-Gruppen im Backend"
+MEMBERSHIP=""
+[ -n "${TUID:-}" ] && MEMBERSHIP=$(ba "/users/$TUID/groups" | jq -r '.[].name' 2>/dev/null)
+for entry in "${BE_GROUPS[@]}"; do
+  GRP="${entry%%:*}"; rest="${entry#*:}"; GSVC="${rest%%:*}"; WANT="${rest#*:}"
+  GID=$(ba "/groups?search=$(uri "$GRP")&exact=true" | jq -r --arg n "$GRP" 'map(select(.name==$n)) | .[0].id // empty')
+  if [ -z "$GID" ]; then bad "Gruppe '$GRP' fehlt" "./setup-realms.sh ausfuehren"; continue; fi
+  ok "Gruppe '$GRP' vorhanden"
+  GSVC_UUID=$(ba "/clients?clientId=$(uri "$GSVC")" | jq -r '.[0].id // empty')
+  HAVE=$(ba "/groups/$GID/role-mappings/clients/$GSVC_UUID" | jq -r '[.[].name] | sort | join(",")')
+  WANTS=$(jq -rn --arg s "$WANT" '$s|split(",")|sort|join(",")')
+  [ "$HAVE" = "$WANTS" ] && ok "  Rollen auf '$GSVC': ${HAVE:-<keine>}" \
+    || bad "  Gruppe '$GRP' Rollen auf '$GSVC': '${HAVE:-<keine>}', erwartet '$WANTS'"
+done
+if [ -n "${TUID:-}" ]; then
+  IFS=',' read -ra WG <<<"$TARGET_GROUPS"
+  for g in "${WG[@]}"; do
+    grep -qx "$g" <<<"$MEMBERSHIP" && ok "Ziel-User Mitglied der Gruppe '$g'" \
+      || bad "Ziel-User NICHT Mitglied der Gruppe '$g'" "sonst fehlen dessen Rollen im token3"
   done
 fi
 

@@ -20,7 +20,9 @@
 #     fahrtkostenerstattung      Ziel-Dienst mit Rollen reader, approver
 #     e-rechnung / fahrt...      Client Scopes: Audience-Mapper + Role Scope Mappings
 #     domain-5678                Requester-Client, loest die Assertion ein
-#     lab-user                   Ziel-User, verknuepft mit dem Frontend-lab-user
+#     domain-5678 / domain-1234  Gruppen: tragen die e-rechnung-Rollen je Mandanten
+#     lab-user                   Ziel-User, verknuepft mit dem Frontend-lab-user,
+#                                 Mitglied beider Mandanten-Gruppen
 #
 # Idempotent: mehrfaches Ausfuehren ist unschaedlich.
 #
@@ -74,6 +76,17 @@ SERVICES=(
   "e-rechnung:reader,writer"
   "fahrtkostenerstattung:reader,approver"
 )
+
+# Mandanten-Gruppen im Backend:  gruppe:dienst:rolle,rolle
+# Jede Gruppe traegt die dienst-spezifischen Client-Rollen ihres Mandanten. Der
+# Ziel-User ist Mitglied (TARGET_GROUPS) - erst darueber entsteht die Vereinigung,
+# die Mapper 2 (Domain B, noch nicht gebaut) per tenant-Claim einschraenken soll.
+# So im Ist-Stand gemessen: nur e-rechnung-Rollen, domain-5678 traegt beide.
+BE_GROUPS=(
+  "domain-5678:e-rechnung:writer,reader"
+  "domain-1234:e-rechnung:reader"
+)
+TARGET_GROUPS="${TARGET_GROUPS:-domain-5678,domain-1234}"
 
 RECREATE=0
 [ "${1:-}" = "--recreate" ] && RECREATE=1
@@ -288,6 +301,43 @@ assign_client_roles_to_user() { # base token realm userId clientUuid label
   case "$RC" in
     204|409) ok "Rollen von '$6' zugewiesen" ;;
     *) die "Rollenzuweisung '$6' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
+  esac
+}
+
+ensure_group() { # base token realm groupName -> echo groupId
+  req "$1" "$2" GET "/admin/realms/$3/groups?search=$(jq -rn --arg s "$4" '$s|@uri')&exact=true"
+  # select statt Verlass auf exact=: aeltere/abweichende Server ignorieren den
+  # Parameter und liefern Substring-Treffer.
+  local id; id=$(jq -r --arg n "$4" 'map(select(.name==$n)) | .[0].id // empty' <"$BODY")
+  if [ -n "$id" ]; then skip "Gruppe '$4' existiert: $id" >&2; echo "$id"; return; fi
+  req "$1" "$2" POST "/admin/realms/$3/groups" "$(jq -nc --arg n "$4" '{name:$n}')"
+  [ "$RC" = "201" ] || die "Gruppe '$4' anlegen fehlgeschlagen (HTTP $RC): $(cat "$BODY")"
+  req "$1" "$2" GET "/admin/realms/$3/groups?search=$(jq -rn --arg s "$4" '$s|@uri')&exact=true"
+  id=$(jq -r --arg n "$4" 'map(select(.name==$n)) | .[0].id // empty' <"$BODY")
+  ok "Gruppe '$4' angelegt: $id" >&2
+  echo "$id"
+}
+
+assign_group_client_roles() { # base token realm groupId clientUuid rolesCsv label
+  local ROLE_JSON="[]" r
+  IFS=',' read -ra RL <<<"$6"
+  for r in "${RL[@]}"; do
+    req "$1" "$2" GET "/admin/realms/$3/clients/$5/roles/$r"
+    [ "$RC" = "200" ] || die "Rolle '$r' fuer Gruppe nicht gefunden (HTTP $RC)"
+    ROLE_JSON=$(jq -c --argjson arr "$ROLE_JSON" '$arr + [.]' <"$BODY")
+  done
+  req "$1" "$2" POST "/admin/realms/$3/groups/$4/role-mappings/clients/$5" "$ROLE_JSON"
+  case "$RC" in
+    204|409) ok "Gruppe '$7': Rollen zugewiesen ($6)" ;;
+    *) die "Gruppen-Rollen '$7' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
+  esac
+}
+
+add_user_to_group() { # base token realm userId groupId label
+  req "$1" "$2" PUT "/admin/realms/$3/users/$4/groups/$5"
+  case "$RC" in
+    204) ok "Mitglied der Gruppe '$6'" ;;
+    *) die "Gruppen-Mitgliedschaft '$6' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
   esac
 }
 
@@ -612,6 +662,32 @@ for entry in $SCOPE_IDS; do
     204|409) ok "Rollen von '$SVC' zugewiesen ($TR)" ;;
     *) die "Rollenzuweisung '$SVC' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
   esac
+done
+
+# --- Mandanten-Gruppen -------------------------------------------------------
+# Die Gruppen tragen die dienst-spezifischen Rollen eines Mandanten; der Ziel-User
+# ist Mitglied beider. Grundlage fuer Mapper 2 (Domain B), der spaeter anhand des
+# tenant-Claims genau eine Mitgliedschaft bestaetigt und nur deren Rollen ausgibt.
+step "Mandanten-Gruppen im Backend"
+GROUP_IDS=""
+for entry in "${BE_GROUPS[@]}"; do
+  GRP="${entry%%:*}"; rest="${entry#*:}"; GSVC="${rest%%:*}"; GROLES="${rest#*:}"
+  GID=$(ensure_group "$BE" "$BE_TOK" "$BE_REALM" "$GRP")
+  # Client-UUID des Dienstes aus SCOPE_IDS (Format 'svc:scopeId:svcUuid')
+  GSVC_UUID=""
+  for e in $SCOPE_IDS; do [ "${e%%:*}" = "$GSVC" ] && GSVC_UUID="${e##*:}"; done
+  [ -n "$GSVC_UUID" ] || die "Dienst '$GSVC' fuer Gruppe '$GRP' nicht gefunden"
+  assign_group_client_roles "$BE" "$BE_TOK" "$BE_REALM" "$GID" "$GSVC_UUID" "$GROLES" "$GRP/$GSVC"
+  GROUP_IDS="$GROUP_IDS $GRP:$GID"
+done
+
+# Ziel-User den Gruppen zuordnen (im Ist-Stand Mitglied beider)
+IFS=',' read -ra TG <<<"$TARGET_GROUPS"
+for g in "${TG[@]}"; do
+  GID=""
+  for e in $GROUP_IDS; do [ "${e%%:*}" = "$g" ] && GID="${e#*:}"; done
+  [ -n "$GID" ] || die "Gruppe '$g' fuer Mitgliedschaft nicht gefunden"
+  add_user_to_group "$BE" "$BE_TOK" "$BE_REALM" "$BE_USER_ID" "$GID" "$g"
 done
 
 # =============================================================================
