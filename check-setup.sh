@@ -3,6 +3,10 @@
 # Prueft die von setup-realms.sh erzeugte Konfiguration gegen die Admin-API.
 # Aendert nichts - reine Diagnose. Exit-Code 1, wenn etwas fehlt.
 #
+# Deckt zwei Ketten ab: den cross-realm Exchange (Frontend -> Backend, Abschnitte
+# 0/1/2) und den internen Exchange innerhalb des Frontend-Realms ueber ein
+# Gateway (Abschnitt 1b).
+#
 #   ./check-setup.sh
 #   DOMAIN=domain-1234 ./check-setup.sh
 
@@ -18,8 +22,14 @@ ADMIN_PASS="${ADMIN_PASS:-admin}"
 DOMAIN="${DOMAIN:-domain-5678}"
 IDP_ALIAS="${IDP_ALIAS:-frontend}"
 ACCESS_SCOPE="${ACCESS_SCOPE:-access-backend}"
-TARGET_USER="${TARGET_USER:-frontend-$DOMAIN}"
+TARGET_USER="${TARGET_USER:-lab-user}"
 SERVICES=(e-rechnung fahrtkostenerstattung)
+
+GATEWAY="${GATEWAY:-gateway}"
+SP_CLIENT="${SP_CLIENT:-self-service-portal}"
+SP_SCOPE="${SP_SCOPE:-to-gateway}"
+LAB_USER="${LAB_USER:-lab-user}"
+FE_DOMAINS=(domain-5678 domain-1234)
 
 FE_ISSUER="$FE/realms/$FE_REALM"
 BE_ISSUER="$BE/realms/$BE_REALM"
@@ -39,6 +49,35 @@ admin_token() {
     -d "username=$ADMIN_USER" -d "password=$ADMIN_PASS" 2>/dev/null | jq -r '.access_token // empty'
 }
 uri() { jq -rn --arg s "$1" '$s|@uri'; }
+
+# Default-Rollen eines Realms - inhaltlich identisch fuer Frontend und Backend,
+# deshalb eine Funktion statt zweimal desselben Blocks (accessor: "fa" oder "ba").
+default_role_check() { # accessor title [zusatz]
+  # Der dritte Parameter ist optional: nur die Gateway-Kette schneidet ueber
+  # audience= zu, die Backend-Kette loest ihre Assertion ohne diesen Parameter ein.
+  local accessor="$1" title="$2" zusatz="${3:-}"
+  head_ "$title"
+  local dr co rn
+  dr=$($accessor "" | jq -r '.defaultRole.id // empty')
+  if [ -z "$dr" ]; then
+    warn "nicht ermittelbar"
+    return
+  fi
+  co=$($accessor "/roles-by-id/$dr/composites")
+  rn=$(jq -r '[.[] | select(.clientRole==false) | .name] | join(", ")' <<<"${co:-[]}")
+  echo "  Realm-Rollen : ${rn:-<keine>}"
+  if [ "$(jq '[.[] | select(.clientRole==true)] | length' <<<"${co:-[]}")" -gt 0 ]; then
+    echo "  Client-Rollen:"
+    jq -r '.[] | select(.clientRole==true) | .containerId + "|" + .name' <<<"$co" \
+    | while IFS='|' read -r cid rn2; do
+        cn=$($accessor "/clients/$cid" | jq -r '.clientId // empty')
+        echo "                 ${cn:-$cid}: $rn2"
+      done
+    warn "Client-Rollen in den Default-Rollen landen bei JEDEM User - haeufigste Erklaerung fuer unerwartete Eintraege in resource_access.${zusatz:+ $zusatz}"
+  else
+    echo "  Client-Rollen: <keine>"
+  fi
+}
 
 # --- 0 -----------------------------------------------------------------------
 head_ "0. Erreichbarkeit und Issuer"
@@ -76,6 +115,9 @@ if [ -n "$SC" ]; then
       | .config["included.client.audience"] // empty' <<<"$SC")
   [ "$M" = "$BE_ISSUER" ] && ok "Audience-Mapper zeigt auf '$BE_ISSUER'" \
     || bad "Audience-Mapper zeigt auf '${M:-<keiner>}'" "erwartet '$BE_ISSUER'"
+  jq -e '.protocolMappers // [] | any(.protocolMapper=="oidc-requested-tenant-mapper")' <<<"$SC" >/dev/null \
+    && ok "RTM-Mapper (oidc-requested-tenant-mapper) vorhanden" \
+    || bad "RTM-Mapper fehlt" "ohne ihn setzt requested_tenant= keinen tenant-Claim in token2"
 else
   bad "Client Scope '$ACCESS_SCOPE' fehlt"
 fi
@@ -87,22 +129,154 @@ else
   ok "Client '$DOMAIN' vorhanden"
   U=$(jq -r '.id' <<<"$C")
   [ "$(jq -r '.publicClient' <<<"$C")" = "false" ] && ok "confidential" \
-    || bad "Client ist public" "public clients duerfen keinen Token Exchange"
-  [ "$(jq -r '.serviceAccountsEnabled' <<<"$C")" = "true" ] && ok "Service accounts On" \
-    || bad "Service accounts Off" "ohne das gibt es keinen Service-Account-User"
-  [ "$(jq -r '.attributes["standard.token.exchange.enabled"] // "false"' <<<"$C")" = "true" ] \
-    && ok "Standard token exchange On" \
-    || bad "Standard token exchange Off" "sonst: unauthorized_client in Schritt 2"
-  if fa "/clients/$U/optional-client-scopes" | jq -e --arg n "$ACCESS_SCOPE" 'any(.name==$n)' >/dev/null; then
-    ok "Scope '$ACCESS_SCOPE' als Optional zugewiesen"
-  elif fa "/clients/$U/default-client-scopes" | jq -e --arg n "$ACCESS_SCOPE" 'any(.name==$n)' >/dev/null; then
-    warn "Scope '$ACCESS_SCOPE' ist Default statt Optional - dann traegt schon token1 die Backend-Audience"
+    || bad "Client ist public"
+  [ "$(jq -r '.serviceAccountsEnabled' <<<"$C")" = "false" ] \
+    && ok "Service accounts Off (reine Ziel-Domain)" \
+    || bad "Service accounts On" "domain-5678 soll keinen eigenen Service Account mehr haben"
+  [ "$(jq -r '.attributes["standard.token.exchange.enabled"] // "false"' <<<"$C")" = "false" ] \
+    && ok "Standard token exchange Off" \
+    || bad "Standard token exchange On" "domain-5678 soll keinen Exchange mehr selbst anstossen"
+  if fa "/clients/$U/optional-client-scopes" | jq -e --arg n "$ACCESS_SCOPE" 'any(.name==$n)' >/dev/null \
+     || fa "/clients/$U/default-client-scopes" | jq -e --arg n "$ACCESS_SCOPE" 'any(.name==$n)' >/dev/null; then
+    warn "Scope '$ACCESS_SCOPE' ist '$DOMAIN' weiterhin zugewiesen - Altlast, siehe docs/Ist-Konfiguration.md"
   else
-    bad "Scope '$ACCESS_SCOPE' nicht zugewiesen"
+    ok "Scope '$ACCESS_SCOPE' nicht zugewiesen"
   fi
-  FE_SA_SUB=$(fa "/clients/$U/service-account-user" | jq -r '.id // empty')
-  [ -n "$FE_SA_SUB" ] && ok "Service-Account-User: $FE_SA_SUB" || bad "kein Service-Account-User"
 fi
+
+# --- 1b Frontend: interner Token Exchange ueber ein Gateway ------------------
+head_ "1b. Frontend-Realm - interner Token Exchange"
+
+GW=$(fa "/clients?clientId=$(uri "$GATEWAY")" | jq '.[0] // empty')
+if [ -z "$GW" ]; then
+  bad "Client '$GATEWAY' fehlt im Realm '$FE_REALM'"
+else
+  ok "Client '$GATEWAY' vorhanden"
+  GU=$(jq -r '.id' <<<"$GW")
+  [ "$(jq -r '.publicClient' <<<"$GW")" = "false" ] && ok "confidential" \
+    || bad "Client ist public" "public clients duerfen keinen Token Exchange"
+  [ "$(jq -r '.attributes["standard.token.exchange.enabled"] // "false"' <<<"$GW")" = "true" ] \
+    && ok "Standard token exchange On" \
+    || bad "Standard token exchange Off" "sonst: Standard token exchange is not enabled for the requested client"
+  [ "$(jq -r '.fullScopeAllowed' <<<"$GW")" = "false" ] && ok "Full scope allowed Off" \
+    || bad "Full scope allowed ist On" \
+           "greift, wenn der Aufrufer audience weglaesst - dann traegt das Token jede Client-Rolle des Users"
+  # Der Weg zur aud fuehrt hier ueber Rollen, nicht ueber einen Audience-Mapper:
+  # der Client Scope 'roles' bringt den eingebauten AudienceResolveProtocolMapper mit.
+  fa "/clients/$GU/default-client-scopes" | jq -e 'any(.name=="roles")' >/dev/null \
+    && ok "Client Scope 'roles' als Default zugewiesen" \
+    || bad "Client Scope 'roles' nicht als Default zugewiesen" \
+           "darin sitzt der AudienceResolveProtocolMapper, ueber den die aud ueberhaupt entsteht - ohne ihn: Requested audience not available"
+  for DM in "${FE_DOMAINS[@]}"; do
+    if fa "/clients/$GU/optional-client-scopes" | jq -e --arg n "$DM" 'any(.name==$n)' >/dev/null; then
+      ok "Scope '$DM' als Optional zugewiesen"
+    elif fa "/clients/$GU/default-client-scopes" | jq -e --arg n "$DM" 'any(.name==$n)' >/dev/null; then
+      warn "Scope '$DM' ist Default statt Optional - dann resolvte immer jede Domain, die Zuschneidung haenge dann allein am audience-Parameter statt sichtbar am angeforderten scope="
+    else
+      bad "Scope '$DM' nicht zugewiesen"
+    fi
+  done
+  if fa "/clients/$GU/optional-client-scopes" | jq -e --arg n "$ACCESS_SCOPE" 'any(.name==$n)' >/dev/null; then
+    ok "Scope '$ACCESS_SCOPE' als Optional zugewiesen"
+  elif fa "/clients/$GU/default-client-scopes" | jq -e --arg n "$ACCESS_SCOPE" 'any(.name==$n)' >/dev/null; then
+    warn "Scope '$ACCESS_SCOPE' ist Default statt Optional"
+  else
+    bad "Scope '$ACCESS_SCOPE' nicht zugewiesen" "ohne ihn kann gateway keinen externen Exchange zum Backend anstossen"
+  fi
+fi
+
+SP=$(fa "/clients?clientId=$(uri "$SP_CLIENT")" | jq '.[0] // empty')
+if [ -z "$SP" ]; then
+  bad "Client '$SP_CLIENT' fehlt im Realm '$FE_REALM'"
+else
+  ok "Client '$SP_CLIENT' vorhanden"
+  SPU=$(jq -r '.id' <<<"$SP")
+  [ "$(jq -r '.publicClient' <<<"$SP")" = "false" ] && ok "confidential" || bad "Client ist public"
+  [ "$(jq -r '.directAccessGrantsEnabled' <<<"$SP")" = "true" ] && ok "Direct Access Grants On" \
+    || bad "Direct Access Grants Off" "ohne das gibt es kein Token per Passwort-Grant"
+
+  SPSC=$(fa "/client-scopes" | jq --arg n "$SP_SCOPE" '.[] | select(.name==$n)')
+  if [ -n "$SPSC" ]; then
+    ok "Client Scope '$SP_SCOPE' vorhanden"
+    M=$(jq -r '.protocolMappers // [] | .[] | select(.protocolMapper=="oidc-audience-mapper")
+        | .config["included.client.audience"] // empty' <<<"$SPSC")
+    [ "$M" = "$GATEWAY" ] && ok "Audience-Mapper zeigt auf '$GATEWAY'" \
+      || bad "Audience-Mapper zeigt auf '${M:-<keiner>}'" "sonst: access_denied: Client is not within the token audience"
+  else
+    bad "Client Scope '$SP_SCOPE' fehlt"
+  fi
+
+  if fa "/clients/$SPU/default-client-scopes" | jq -e --arg n "$SP_SCOPE" 'any(.name==$n)' >/dev/null; then
+    ok "Scope '$SP_SCOPE' als Default zugewiesen"
+  else
+    bad "Scope '$SP_SCOPE' nicht als Default zugewiesen" \
+        "sonst fehlt die aud im SP-Token, solange der Grant scope= nicht selbst mitschickt"
+  fi
+fi
+
+for DM in "${FE_DOMAINS[@]}"; do
+  head_ "1b. Ziel-Domain '$DM'"
+  DC=$(fa "/clients?clientId=$(uri "$DM")" | jq '.[0] // empty')
+  if [ -z "$DC" ]; then bad "Client '$DM' fehlt im Realm '$FE_REALM'"; continue; fi
+  ok "Client '$DM' vorhanden"
+  DCU=$(jq -r '.id' <<<"$DC")
+
+  DMR=$(fa "/clients/$DCU/roles" | jq -r 'map(.name)|join(", ")')
+  [ -n "$DMR" ] && ok "Rollen: $DMR" \
+    || bad "Client '$DM' hat keine Rollen" "ohne Rollen entsteht keine aud - der Exchange endet in: Requested audience not available"
+
+  DSC=$(fa "/client-scopes" | jq --arg n "$DM" '.[] | select(.name==$n)')
+  if [ -z "$DSC" ]; then bad "Client Scope '$DM' fehlt"; continue; fi
+  ok "Client Scope '$DM' vorhanden"
+  DSCID=$(jq -r '.id' <<<"$DSC")
+
+  DSM=$(fa "/client-scopes/$DSCID/scope-mappings/clients/$DCU" | jq -r 'map(.name)|join(", ")')
+  [ -n "$DSM" ] && ok "Role Scope Mappings: $DSM" \
+    || bad "Scope '$DM' hat keine Role Scope Mappings" "ohne die filtert der Scope keine Rollen"
+
+  HM=$(jq -r --arg n "domain" '.protocolMappers // [] | .[]
+      | select(.protocolMapper=="oidc-hardcoded-claim-mapper" and .config["claim.name"]==$n)' <<<"$DSC")
+  if [ -z "$HM" ]; then
+    bad "Hardcoded-Claim-Mapper fuer 'domain' fehlt" "ohne ihn fehlt der domain-Claim im getauschten Token"
+  else
+    HV=$(jq -r '.config["claim.value"] // empty' <<<"$HM")
+    [ "$HV" = "$DM" ] && ok "Hardcoded-Claim-Mapper: domain=$HV" \
+      || bad "Hardcoded-Claim-Mapper traegt domain=${HV:-<leer>}" "erwartet '$DM'"
+  fi
+done
+
+head_ "1b. Lab-User '$LAB_USER'"
+LU=$(fa "/users?username=$(uri "$LAB_USER")&exact=true" | jq '.[0] // empty')
+if [ -z "$LU" ]; then
+  bad "User '$LAB_USER' fehlt" "./setup-realms.sh ausfuehren"
+else
+  LUID=$(jq -r '.id' <<<"$LU")
+  ok "User vorhanden: $LUID"
+  [ "$(jq -r '.enabled' <<<"$LU")" = "true" ] && ok "enabled" || bad "User ist disabled"
+  [ "$(jq -r '.requiredActions // [] | length' <<<"$LU")" -eq 0 ] && ok "keine Required Actions" \
+    || bad "offene Required Actions" "sonst: Account is not fully set up"
+  EM=$(jq -r '.email // empty' <<<"$LU")
+  FN=$(jq -r '.firstName // empty' <<<"$LU")
+  LN=$(jq -r '.lastName // empty' <<<"$LU")
+  if [ -n "$EM" ] && [ -n "$FN" ] && [ -n "$LN" ]; then
+    ok "email/firstName/lastName gesetzt"
+  else
+    bad "email/firstName/lastName unvollstaendig (email='$EM' firstName='$FN' lastName='$LN')" \
+        "das deklarative User Profile loest sonst dynamisch VERIFY_PROFILE aus und der Passwort-Grant scheitert ebenfalls mit 'Account is not fully set up', obwohl requiredActions leer ist. Im Server-Log steht dann error=\"resolve_required_actions\""
+  fi
+  fa "/users/$LUID/credentials" | jq -e 'any(.type=="password")' >/dev/null \
+    && ok "Passwort-Credential vorhanden" \
+    || bad "kein Passwort-Credential" "ohne Passwort kein Passwort-Grant"
+  RM=$(fa "/users/$LUID/role-mappings")
+  for DM in "${FE_DOMAINS[@]}"; do
+    RR=$(jq -r --arg c "$DM" '.clientMappings[$c].mappings // [] | map(.name) | join(", ")' <<<"${RM:-{\}}")
+    [ -n "$RR" ] && ok "Rollen auf '$DM': $RR" \
+      || bad "keine Rollen auf '$DM'" "dann ist resource_access im Token leer"
+  done
+fi
+
+default_role_check fa "1b. Default-Rollen des Frontend-Realms" \
+  "Im getauschten Token verschwinden sie wieder, sobald audience= mitgeschickt wird - restrictRequestedAudience entfernt aus resource_access jeden Client, der nicht in der angeforderten Audience steht."
 
 # --- 2 Backend ---------------------------------------------------------------
 head_ "2. Backend-Realm '$BE_REALM' - Identity Provider"
@@ -201,8 +375,8 @@ else
   L=$(ba "/users/$TUID/federated-identity" | jq -r --arg i "$IDP_ALIAS" \
       '.[] | select(.identityProvider==$i) | .userId')
   if [ -z "$L" ]; then bad "keine Federated Identity fuer '$IDP_ALIAS'"
-  elif [ "$L" = "${FE_SA_SUB:-}" ]; then ok "verknuepft mit Frontend-sub $L"
-  else bad "verknuepft mit '$L', Frontend-sub ist '${FE_SA_SUB:-unbekannt}'" "./setup-realms.sh erneut ausfuehren"; fi
+  elif [ "$L" = "${LUID:-}" ]; then ok "verknuepft mit Frontend-lab-user $L"
+  else bad "verknuepft mit '$L', Frontend-lab-user ist '${LUID:-unbekannt}'" "./setup-realms.sh erneut ausfuehren"; fi
   RM=$(ba "/users/$TUID/role-mappings")
   for SVC in "${SERVICES[@]}"; do
     RR=$(jq -r --arg c "$SVC" '.clientMappings[$c].mappings // [] | map(.name) | join(", ")' <<<"${RM:-{\}}")
@@ -212,26 +386,7 @@ else
 fi
 
 # --- Default-Rollen ----------------------------------------------------------
-head_ "2. Default-Rollen des Realms (bekommt jeder neue User automatisch)"
-DR=$(ba "" | jq -r '.defaultRole.id // empty')
-if [ -z "$DR" ]; then
-  warn "nicht ermittelbar"
-else
-  CO=$(ba "/roles-by-id/$DR/composites")
-  RN=$(jq -r '[.[] | select(.clientRole==false) | .name] | join(", ")' <<<"${CO:-[]}")
-  echo "  Realm-Rollen : ${RN:-<keine>}"
-  if [ "$(jq '[.[] | select(.clientRole==true)] | length' <<<"${CO:-[]}")" -gt 0 ]; then
-    echo "  Client-Rollen:"
-    jq -r '.[] | select(.clientRole==true) | .containerId + "|" + .name' <<<"$CO" \
-    | while IFS='|' read -r cid rn; do
-        cn=$(ba "/clients/$cid" | jq -r '.clientId // empty')
-        echo "                 ${cn:-$cid}: $rn"
-      done
-    warn "Client-Rollen in den Default-Rollen landen bei JEDEM User - haeufigste Erklaerung fuer unerwartete Eintraege in resource_access"
-  else
-    echo "  Client-Rollen: <keine>"
-  fi
-fi
+default_role_check ba "2. Default-Rollen des Realms (bekommt jeder neue User automatisch)"
 
 echo
 if [ "$FAILED" -eq 0 ]; then
