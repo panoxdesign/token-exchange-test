@@ -31,7 +31,7 @@ import java.util.List;
  * Fail-closed: fehlt der subject_token oder sein "domain"-Claim, wird "tenant"
  * gar nicht erst gesetzt (Mapper 2 im Backend leert dann resource_access).
  *
- * Nur auf dem Client-Scope "access-domainb" registrieren, damit der Mapper
+ * Nur auf dem Client-Scope "access-backend" registrieren, damit der Mapper
  * ausschliesslich bei diesem einen Exchange-Schritt greift.
  */
 public class RequestedTenantMapper extends AbstractOIDCProtocolMapper

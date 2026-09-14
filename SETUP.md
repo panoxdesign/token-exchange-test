@@ -390,6 +390,11 @@ filtert, und ohne einen vom Aufrufer frei wählbaren Request-Parameter.
 > bereits geprüft hat. Ein zusätzlicher `requested_tenant=`-Parameter existiert seit dieser Härtung
 > nicht mehr: Wer ihn trotzdem mitschickt, bewirkt nichts — der `tenant`-Claim in token2 folgt
 > ausschließlich `token1.domain`. Siehe Troubleshooting unten für den gemessenen Beleg.
+>
+> **Vorbehalt:** Dass die Signaturvalidierung des subject_token *vor* dem Mapper-Lauf passiert, ist
+> beobachtetes internes Verhalten von Keycloak 26.7 — kein dokumentierter API-Vertrag. Für die
+> gepinnte Version verlässlich (der praktische Beleg dafür sind der Positiv- und der
+> Fail-closed-Test unten), bei einem Major-Upgrade aber neu zu prüfen.
 
 In `token3` ist `sub` der **Backend-`lab-user`** (verknüpft mit dem Frontend-lab-user, eigene UUID,
 bei jedem Neuaufbau anders) statt wie früher `frontend-domain-5678`. **`token3` trägt jetzt einen
