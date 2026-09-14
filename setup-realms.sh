@@ -7,7 +7,7 @@
 #     domain-1234                zweite Ziel-Domain, Rollen admin, selfservice
 #     <backend-issuer-url>       Client, der nur als Audience-Ziel existiert
 #     access-backend             Client Scope mit Audience-Mapper und RTM-Mapper
-#                                 (requested_tenant -> Claim tenant)
+#                                 (subject_token.domain -> Claim tenant)
 #     gateway                    Requester-Client des internen UND externen Exchange,
 #                                 darf Token Exchange
 #     self-service-portal        Client fuer den Password Grant des Lab-Users
@@ -236,9 +236,9 @@ ensure_audience_mapper() { # base token realm scopeId audienceClientId
 }
 
 ensure_requested_tenant_mapper() { # base token realm scopeId
-  # Liest den requested_tenant-Parameter des Exchange (Request 02) und legt ihn
-  # als Claim 'tenant' in token2 ab - config bleibt leer, der Mapper braucht
-  # keine weitere Einstellung.
+  # Leitet beim Exchange (Request 02) den Claim 'tenant' aus dem domain-Claim
+  # des subject_token (token1) ab und legt ihn in token2 ab - config bleibt
+  # leer, der Mapper braucht keine weitere Einstellung.
   req "$1" "$2" GET "/admin/realms/$3/client-scopes/$4/protocol-mappers/models"
   if jq -e 'any(.protocolMapper == "oidc-requested-tenant-mapper")' <"$BODY" >/dev/null; then
     skip "RTM-Mapper vorhanden"; return
@@ -733,7 +733,6 @@ cat <<EOF
     -d subject_token="\$token1" \\
     -d scope=$ACCESS_SCOPE \\
     -d audience=$BE_ISSUER \\
-    -d requested_tenant=$DOMAIN \\
     -d client_id=$GATEWAY -d client_secret=$SEC_GATEWAY | jq -r .access_token)
 
   token3=\$(curl -s -X POST "\$BE/realms/$BE_REALM/protocol/openid-connect/token" \\

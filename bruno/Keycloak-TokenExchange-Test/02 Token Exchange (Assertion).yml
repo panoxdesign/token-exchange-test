@@ -23,8 +23,6 @@ http:
         value: "{{GATEWAY_CLIENT}}"
       - name: client_secret
         value: "{{GATEWAY_SECRET}}"
-      - name: requested_tenant
-        value: domain-1234
   auth: inherit
 
 runtime:

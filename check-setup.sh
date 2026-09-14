@@ -126,7 +126,7 @@ if [ -n "$SC" ]; then
     || bad "Audience-Mapper zeigt auf '${M:-<keiner>}'" "erwartet '$BE_ISSUER'"
   jq -e '.protocolMappers // [] | any(.protocolMapper=="oidc-requested-tenant-mapper")' <<<"$SC" >/dev/null \
     && ok "RTM-Mapper (oidc-requested-tenant-mapper) vorhanden" \
-    || bad "RTM-Mapper fehlt" "ohne ihn setzt requested_tenant= keinen tenant-Claim in token2"
+    || bad "RTM-Mapper fehlt" "ohne ihn bekommt token2 keinen tenant-Claim"
 else
   bad "Client Scope '$ACCESS_SCOPE' fehlt"
 fi
@@ -151,6 +151,21 @@ else
   else
     ok "Scope '$ACCESS_SCOPE' nicht zugewiesen"
   fi
+fi
+
+# Vertrauensanker fuer den RTM-Mapper: der Domain-Scope selbst (Name = Domain)
+# muss den Hardcoded-Claim-Mapper 'domain=<Name>' tragen, sonst hat token1 gar
+# keinen domain-Claim, aus dem der RTM-Mapper 'tenant' ableiten koennte.
+DSC=$(fa "/client-scopes" | jq --arg n "$DOMAIN" '.[] | select(.name==$n)')
+if [ -n "$DSC" ]; then
+  V=$(jq -r --arg n "domain" '.protocolMappers // [] | .[]
+      | select(.protocolMapper=="oidc-hardcoded-claim-mapper" and .config["claim.name"]==$n)
+      | .config["claim.value"] // empty' <<<"$DSC")
+  [ "$V" = "$DOMAIN" ] && ok "Domain-Scope '$DOMAIN' traegt Hardcoded-Claim-Mapper 'domain=$DOMAIN'" \
+    || bad "Hardcoded-Claim-Mapper 'domain' auf Scope '$DOMAIN' fehlt oder zeigt auf '${V:-<keiner>}'" \
+      "Vertrauensanker fuer den tenant-Claim in token2 - ohne ihn kann der RTM-Mapper nichts ableiten"
+else
+  bad "Domain-Scope '$DOMAIN' fehlt"
 fi
 
 # --- 1b Frontend: interner Token Exchange ueber ein Gateway ------------------

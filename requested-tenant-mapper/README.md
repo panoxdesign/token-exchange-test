@@ -1,10 +1,13 @@
 # Requested Tenant Mapper
 
 Custom Protocol Mapper "Requested Tenant Mapper" fuer **Domain A** (`frontend-keycloak`). Er liest
-beim Standard Token Exchange den zusaetzlichen Request-Parameter `requested_tenant` und schreibt ihn
-unveraendert als `tenant`-Claim in die ausgestellte Assertion (token2). Der Mapper **validiert
-nichts** — er transportiert den Wert nur. Die eigentliche Pruefung der Mandanten-Mitgliedschaft
-passiert spaeter in Domain B durch einen zweiten Mapper (nicht Teil dieses Unterprojekts).
+beim Standard Token Exchange (token1 -> token2) den `domain`-Claim aus dem subject_token (token1)
+und schreibt ihn als `tenant`-Claim in die ausgestellte Assertion (token2). Der subject_token ist
+bereits vom Exchange signaturgeprueft, bevor Mapper laufen - eine erneute Pruefung ist hier nicht
+noetig. Ein Request-Parameter wird bewusst **nicht** entgegengenommen: fruehere Fassungen lasen
+`requested_tenant` frei aus den Form-Parametern, was Privilege Escalation erlaubte (Aufrufer konnte
+sich einen beliebigen Mandanten aussuchen). Die eigentliche Pruefung der Mandanten-Mitgliedschaft
+passiert weiterhin spaeter in Domain B durch einen zweiten Mapper (nicht Teil dieses Unterprojekts).
 
 ## JAR bauen
 
@@ -68,21 +71,32 @@ Der Mapper hat **keine** Konfigurationsoptionen und muss keine haben: er schreib
 das Access Token, sobald er greift (er ueberschreibt dafuer `transformAccessToken`). Der sonst
 uebliche Schalter "Add to access token" waere hier wirkungslos und entfaellt bewusst.
 
-## Claim-Transport testen
+## Claim-Ableitung testen
 
 Zwei Dinge muessen stimmen, sonst laeuft der Mapper nicht:
 
 - **Der Scope muss angefordert werden** (`scope=access-backend`) — und der anfragende Client muss
-  diesen Scope zugewiesen haben. Im Lab-Setup hat ihn der **`domain-5678`-Client**, nicht `gateway`.
-  Mit einem Client ohne diesen Scope antwortet Keycloak mit `invalid_scope`.
-- Der Parameter heisst `requested_tenant` und wird als Form-Feld mitgeschickt.
+  diesen Scope zugewiesen haben. Im Lab-Setup hat ihn `gateway`. Ohne diesen Scope antwortet
+  Keycloak mit `invalid_scope`.
+- Der subject_token (token1) braucht einen `domain`-Claim — den setzt der Hardcoded-Claim-Mapper
+  auf dem Domain-Scope (siehe `setup-realms.sh`, `ensure_hardcoded_claim_mapper`).
+
+Vollstaendige Kette (siehe `SETUP.md`, Abschnitt "Die Kette durchlaufen"):
 
 ```bash
 FE=http://localhost:8080
 
+token_sp=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
+  -d grant_type=password \
+  -d username=lab-user -d password=lab-user \
+  -d client_id=self-service-portal -d client_secret=lab-frontend-sp-secret | jq -r .access_token)
+
 token1=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
-  -d grant_type=client_credentials \
-  -d client_id=domain-5678 -d client_secret=lab-frontend-domain-5678-secret | jq -r .access_token)
+  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
+  -d subject_token="$token_sp" \
+  -d audience=domain-5678 -d scope=domain-5678 \
+  -d client_id=gateway -d client_secret=lab-frontend-gateway-secret | jq -r .access_token)
 
 token2=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
@@ -90,14 +104,16 @@ token2=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d subject_token="$token1" \
   -d scope=access-backend \
   -d audience=http://localhost:8181/realms/Backend-Microservices \
-  -d requested_tenant=domain-1234 \
-  -d client_id=domain-5678 -d client_secret=lab-frontend-domain-5678-secret | jq -r .access_token)
+  -d client_id=gateway -d client_secret=lab-frontend-gateway-secret | jq -r .access_token)
 
 echo "$token2" | cut -d. -f2 | base64 -d 2>/dev/null | jq .tenant
 ```
 
-Erwartet:
+Erwartet (gemessen):
 
 ```json
-"tenant": "domain-1234"
+"tenant": "domain-5678"
 ```
+
+Ein zusaetzlich mitgeschickter `requested_tenant=domain-1234` aendert daran nichts mehr — der
+Mapper liest den Parameter gar nicht erst.
