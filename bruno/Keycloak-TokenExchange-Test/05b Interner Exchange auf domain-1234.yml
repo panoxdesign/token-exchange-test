@@ -1,0 +1,67 @@
+info:
+  name: 05b Interner Exchange auf domain-1234
+  type: http
+  seq: 7
+
+http:
+  method: POST
+  url: "{{FE_URL}}/realms/{{FE_REALM}}/protocol/openid-connect/token"
+  body:
+    type: form-urlencoded
+    data:
+      - name: grant_type
+        value: urn:ietf:params:oauth:grant-type:token-exchange
+      - name: subject_token_type
+        value: urn:ietf:params:oauth:token-type:access_token
+      - name: subject_token
+        value: "{{token_sp}}"
+      - name: audience
+        value: "{{DOMAIN_1234}}"
+      - name: scope
+        value: "{{DOMAIN_1234}}"
+      - name: client_id
+        value: "{{GATEWAY_CLIENT}}"
+      - name: client_secret
+        value: "{{GATEWAY_SECRET}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: bru.setVar("token1", res.body.access_token);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |
+  Schritt 5b. Identisch mit Request 05a, nur mit domain-1234 als Ziel-Domain -
+  und ohne dass token_sp neu geholt werden muss. Das Token aus Request 04 ist
+  ein normales Bearer-Token, keine Assertion; es gilt nicht nur einmal.
+
+  Beide Parameter bleiben Pflicht, aus denselben Gruenden wie in 05a:
+
+  scope=domain-1234   aktiviert den optionalen Client Scope am gateway und
+                       damit die Role Scope Mappings auf die Rollen von
+                       domain-1234. Erst diese Rollen erzeugen ueber den
+                       eingebauten AudienceResolveProtocolMapper (Client
+                       Scope roles) die aud. Ohne scope= entsteht keine aud,
+                       und der Request endet mit invalid_request: Requested
+                       audience not available: domain-1234.
+
+  audience=domain-1234  filtert aud und resource_access auf domain-1234
+                       (TokenManager.restrictRequestedAudience). Fuegt nichts
+                       hinzu, laesst man ihn weg, laeuft der Filter nicht -
+                       hier unauffaellig, weil gateway Full scope allowed
+                       Off hat.
+
+  Erwartung:
+    aud               domain-1234
+    azp               gateway
+    sub               <UUID des lab-user>
+    domain            domain-1234
+    scope             profile email domain-1234
+    resource_access   { "domain-1234": { "roles": ["approver", "reader"] } }

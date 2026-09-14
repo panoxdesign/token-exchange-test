@@ -3,8 +3,8 @@
 # Baut die komplette Token-Exchange-Kette in beiden Keycloak-Instanzen auf.
 #
 #   Frontend-Realm  frontend
-#     domain-5678                Ziel-Domain des internen Exchange, Rollen reader, writer
-#     domain-1234                zweite Ziel-Domain, Rollen reader, approver
+#     domain-5678                Ziel-Domain des internen Exchange, Rollen admin, selfservice
+#     domain-1234                zweite Ziel-Domain, Rollen admin, selfservice
 #     <backend-issuer-url>       Client, der nur als Audience-Ziel existiert
 #     access-backend             Client Scope mit Audience-Mapper und RTM-Mapper
 #                                 (requested_tenant -> Claim tenant)
@@ -20,9 +20,12 @@
 #     fahrtkostenerstattung      Ziel-Dienst mit Rollen reader, approver
 #     e-rechnung / fahrt...      Client Scopes: Audience-Mapper + Role Scope Mappings
 #     domain-5678                Requester-Client, loest die Assertion ein
-#     domain-5678 / domain-1234  Gruppen: tragen die e-rechnung-Rollen je Mandanten
+#     domain-5678 / domain-1234  Gruppen: tragen je Mandant die Rollen BEIDER Dienste
+#                                 (asymmetrischer Split), alleinige Rollenquelle
+#     tenant-restriction         Client Scope am Requester mit Mapper 2
+#                                 (oidc-tenant-restriction-mapper), Default-Scope
 #     lab-user                   Ziel-User, verknuepft mit dem Frontend-lab-user,
-#                                 Mitglied beider Mandanten-Gruppen
+#                                 Mitglied beider Gruppen, KEINE direkten Rollen
 #
 # Idempotent: mehrfaches Ausfuehren ist unschaedlich.
 #
@@ -33,7 +36,7 @@ set -uo pipefail
 
 # --- Konfiguration -----------------------------------------------------------
 FE="${FE:-http://localhost:8080}"
-BE="${BE:-http://localhost:8081}"
+BE="${BE:-http://localhost:8181}"
 FE_REALM="${FE_REALM:-frontend}"
 BE_REALM="${BE_REALM:-Backend-Microservices}"
 ADMIN_USER="${ADMIN_USER:-admin}"
@@ -67,8 +70,8 @@ SEC_SP="${SEC_SP:-lab-frontend-sp-secret}"
 # Ziel-Domains des internen Token Exchange:  name:rolle,rolle
 # Die Rollen sind nicht Beiwerk - ueber sie entsteht die aud des Ergebnis-Tokens.
 FE_DOMAINS=(
-  "domain-5678:reader,writer"
-  "domain-1234:reader,approver"
+  "domain-5678:admin,selfservice"
+  "domain-1234:admin,selfservice"
 )
 
 # Ziel-Dienste:  name:rolle,rolle
@@ -78,13 +81,17 @@ SERVICES=(
 )
 
 # Mandanten-Gruppen im Backend:  gruppe:dienst:rolle,rolle
-# Jede Gruppe traegt die dienst-spezifischen Client-Rollen ihres Mandanten. Der
-# Ziel-User ist Mitglied (TARGET_GROUPS) - erst darueber entsteht die Vereinigung,
-# die Mapper 2 (Domain B, noch nicht gebaut) per tenant-Claim einschraenken soll.
-# So im Ist-Stand gemessen: nur e-rechnung-Rollen, domain-5678 traegt beide.
+# Jede Gruppe traegt die dienst-spezifischen Client-Rollen ihres Mandanten und ist
+# die alleinige Rollenquelle des Ziel-Users (keine direkten Rollen mehr, s. u.). Der
+# Ziel-User ist Mitglied beider Gruppen (TARGET_GROUPS) - erst darueber entsteht die
+# Vereinigung, die Mapper 2 (oidc-tenant-restriction-mapper) per tenant-Claim auf
+# genau eine Gruppe einschraenkt. Asymmetrischer Split je Mandant und Dienst, damit
+# die Trennung an beiden Diensten sichtbar wird.
 BE_GROUPS=(
   "domain-5678:e-rechnung:writer,reader"
+  "domain-5678:fahrtkostenerstattung:reader,approver"
   "domain-1234:e-rechnung:reader"
+  "domain-1234:fahrtkostenerstattung:reader"
 )
 TARGET_GROUPS="${TARGET_GROUPS:-domain-5678,domain-1234}"
 
@@ -240,6 +247,20 @@ ensure_requested_tenant_mapper() { # base token realm scopeId
       protocolMapper:"oidc-requested-tenant-mapper", config:{}}')"
   [ "$RC" = "201" ] || die "RTM-Mapper anlegen fehlgeschlagen (HTTP $RC): $(cat "$BODY")"
   ok "RTM-Mapper angelegt"
+}
+
+ensure_tenant_restriction_mapper() { # base token realm scopeId
+  # Mapper 2: verengt resource_access in token3 auf die Rollen der bestaetigten
+  # Mandanten-Gruppe. config bleibt leer, der Mapper braucht keine Einstellung.
+  req "$1" "$2" GET "/admin/realms/$3/client-scopes/$4/protocol-mappers/models"
+  if jq -e 'any(.protocolMapper == "oidc-tenant-restriction-mapper")' <"$BODY" >/dev/null; then
+    skip "Tenant-Restriction-Mapper vorhanden"; return
+  fi
+  req "$1" "$2" POST "/admin/realms/$3/client-scopes/$4/protocol-mappers/models" \
+    "$(jq -nc '{name:"tenant-restriction", protocol:"openid-connect",
+      protocolMapper:"oidc-tenant-restriction-mapper", config:{}}')"
+  [ "$RC" = "201" ] || die "Tenant-Restriction-Mapper anlegen fehlgeschlagen (HTTP $RC): $(cat "$BODY")"
+  ok "Tenant-Restriction-Mapper angelegt"
 }
 
 ensure_client_role() { # base token realm clientUuid role
@@ -595,6 +616,13 @@ for entry in $SCOPE_IDS; do
   assign_optional_scope "$BE" "$BE_TOK" "$BE_REALM" "$BE_DOMAIN_UUID" "$SID" "$SVC"
 done
 
+# Mapper 2 als Default-Scope am Backend-Requester: verengt token3 auf die Rollen
+# der bestaetigten Mandanten-Gruppe. Default (nicht optional), damit er bei JEDEM
+# jwt-bearer-Grant greift - auch fail-closed, wenn gar kein Dienst-Scope aktiv ist.
+TR_SCOPE_ID=$(ensure_scope "$BE" "$BE_TOK" "$BE_REALM" "tenant-restriction")
+ensure_tenant_restriction_mapper "$BE" "$BE_TOK" "$BE_REALM" "$TR_SCOPE_ID"
+assign_default_scope "$BE" "$BE_TOK" "$BE_REALM" "$BE_DOMAIN_UUID" "$TR_SCOPE_ID" "tenant-restriction"
+
 # --- Ziel-User ---------------------------------------------------------------
 step "Ziel-User '$TARGET_USER'"
 
@@ -634,34 +662,23 @@ else
   esac
 fi
 
-# Rollen: hier - und nur hier - entscheidet sich, was die Kette im Backend darf.
-# Aus dem Frontend kommen keine Berechtigungen, die Assertion transportiert nur Identitaet.
-# Bewusste Teilmenge der Dienst-Rollen (nicht "alle Rollen jedes Dienstes") - so
-# im Ist-Stand gemessen.
-TARGET_ROLES=(
-  "e-rechnung:reader,writer"
-  "fahrtkostenerstattung:reader"
-)
+# Keine direkten Dienst-Rollen mehr am Ziel-User: seit Mapper 2 sind die
+# Mandanten-Gruppen die alleinige Rollenquelle. Direkte Rollen waeren
+# tenant-agnostisch und wuerden den Zuschnitt unterlaufen. Deshalb hier aktiv
+# entfernen - konvergent: ein zweiter Lauf findet nichts mehr zu loeschen.
 for entry in $SCOPE_IDS; do
   SVC="${entry%%:*}"; rest="${entry#*:}"; SVC_UUID="${rest#*:}"
-  TR=""
-  for t in "${TARGET_ROLES[@]}"; do
-    [ "${t%%:*}" = "$SVC" ] && TR="${t#*:}"
-  done
-  [ -n "$TR" ] || continue
-
-  ROLE_JSON="[]"
-  IFS=',' read -ra ROLE_LIST <<<"$TR"
-  for r in "${ROLE_LIST[@]}"; do
-    req "$BE" "$BE_TOK" GET "/admin/realms/$BE_REALM/clients/$SVC_UUID/roles/$r"
-    [ "$RC" = "200" ] || die "Rolle '$r' an '$SVC' nicht gefunden (HTTP $RC)"
-    ROLE_JSON=$(jq -c --argjson arr "$ROLE_JSON" '$arr + [.]' <"$BODY")
-  done
-  req "$BE" "$BE_TOK" POST "/admin/realms/$BE_REALM/users/$BE_USER_ID/role-mappings/clients/$SVC_UUID" "$ROLE_JSON"
-  case "$RC" in
-    204|409) ok "Rollen von '$SVC' zugewiesen ($TR)" ;;
-    *) die "Rollenzuweisung '$SVC' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
-  esac
+  req "$BE" "$BE_TOK" GET "/admin/realms/$BE_REALM/users/$BE_USER_ID/role-mappings/clients/$SVC_UUID"
+  CURRENT=$(cat "$BODY")
+  if [ "$(jq 'length' <<<"$CURRENT" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+    req "$BE" "$BE_TOK" DELETE "/admin/realms/$BE_REALM/users/$BE_USER_ID/role-mappings/clients/$SVC_UUID" "$CURRENT"
+    case "$RC" in
+      204) ok "Direkte Rollen von '$SVC' am Ziel-User entfernt" ;;
+      *) die "Direkte Rollen '$SVC' entfernen fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
+    esac
+  else
+    skip "Ziel-User hat keine direkten Rollen auf '$SVC'"
+  fi
 done
 
 # --- Mandanten-Gruppen -------------------------------------------------------

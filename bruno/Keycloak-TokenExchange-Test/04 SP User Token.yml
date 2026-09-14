@@ -1,0 +1,62 @@
+info:
+  name: 04 SP User Token
+  type: http
+  seq: 5
+
+http:
+  method: POST
+  url: "{{FE_URL}}/realms/{{FE_REALM}}/protocol/openid-connect/token"
+  body:
+    type: form-urlencoded
+    data:
+      - name: grant_type
+        value: password
+      - name: username
+        value: "{{LAB_USER}}"
+      - name: password
+        value: "{{LAB_PASS}}"
+      - name: client_id
+        value: "{{SP_CLIENT}}"
+      - name: client_secret
+        value: "{{SP_SECRET}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: bru.setVar("token_sp", res.body.access_token);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |
+  Schritt 4. Beginn der internen Gateway-Kette. Ein ganz gewoehnlicher
+  Passwort-Grant des Clients self-service-portal fuer den lab-user - nichts
+  an diesem Request selbst ist Token Exchange.
+
+  Das Besondere ist allein die aud im Ergebnis. Der Client Scope to-gateway
+  haengt als DEFAULT am SP-Client und traegt einen Audience-Mapper auf
+  gateway. Deshalb steht aud: gateway in jedem SP-Token, ohne dass der
+  Passwort-Grant dafuer etwas mitschicken muesste. Fehlt dieses aud: gateway,
+  antwortet Request 05 mit access_denied: Client is not within the token
+  audience - ein Client darf ein fremdes Token nur tauschen, wenn er selbst
+  in dessen aud steht.
+
+  Stolperfalle, die real Zeit gekostet hat: der lab-user braucht email,
+  firstName und lastName. Fehlt eines davon, loest das deklarative User
+  Profile dynamisch VERIFY_PROFILE aus, und dieser Request scheitert mit
+  invalid_grant: Account is not fully set up - obwohl requiredActions leer
+  ist. Im Server-Log steht dann error="resolve_required_actions".
+
+  Erwartung:
+    iss                 http://localhost:8080/realms/frontend
+    aud                 gateway
+    azp                 self-service-portal
+    sub                 <UUID des lab-user>
+    scope               to-gateway profile email
+    preferred_username  lab-user
+    resource_access     nicht vorhanden - der SP-Client hat Full scope allowed Off

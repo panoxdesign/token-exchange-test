@@ -4,7 +4,7 @@ Ein Service-Account-Client im **Frontend-Keycloak** tauscht sein Token gegen ein
 **Backend-Keycloak**, zugeschnitten auf genau einen von zwei Ziel-Diensten.
 
 ```
-Frontend (localhost:8080)              Backend (localhost:8081)
+Frontend (localhost:8080)              Backend (localhost:8181)
 ─────────────────────────              ────────────────────────
 domain-5678  (Service Account)         domain-5678  (Requester)
      │ client_credentials                   │ jwt-bearer + scope=e-rechnung
@@ -177,7 +177,7 @@ Gelöst über zwei getrennte Felder im IdP, die verschiedene Hosts nennen dürfe
 
 Konsequenzen: Der **Discovery endpoint** im Admin-UI ist unbenutzbar (das Backend suchte
 `localhost:8080` bei sich selbst) — `setup-realms.sh` konfiguriert den IdP deshalb von Hand. Und alle
-Requests müssen konsequent über `localhost:8080` bzw. `:8081` laufen; unter einem anderen Namen
+Requests müssen konsequent über `localhost:8080` bzw. `:8181` laufen; unter einem anderen Namen
 ändert sich der berechnete Issuer und die `aud`-Prüfung schlägt fehl.
 
 `docker-compose.yaml` setzt dafür `KC_HOSTNAME` auf beiden Instanzen. Prüfen:
@@ -208,7 +208,7 @@ gateway  (Requester, intern UND extern)                     ▲
        │ scope=domain-5678, sub bleibt lab-user       domain-5678  (Requester)
        ▼                                                JWT Auth Grant: ON
 domain-5678  (Ziel-Domain)                              Full scope allowed: OFF
-  Rollen reader, writer                                 Scopes e-rechnung /
+  Rollen admin, selfservice                             Scopes e-rechnung /
        │                                                       fahrtkostenerstattung
        │ zurueck an gateway:                                  (beide optional)
        │ scope=access-backend,                                     │
@@ -267,10 +267,10 @@ die `aud` hier über Rollen statt über einen Audience-Mapper entsteht.
 
 | Objekt | Zweck |
 |---|---|
-| Client `http://localhost:8081/realms/Backend-Microservices` | existiert nur als Audience-Ziel. Der Audience-Mapper kann nur die ID eines *existierenden* Clients in `aud` schreiben, und `aud` muss der Issuer des Empfängers sein — daher der URL-förmige Name |
+| Client `http://localhost:8181/realms/Backend-Microservices` | existiert nur als Audience-Ziel. Der Audience-Mapper kann nur die ID eines *existierenden* Clients in `aud` schreiben, und `aud` muss der Issuer des Empfängers sein — daher der URL-förmige Name |
 | Client Scope `access-backend` | Audience-Mapper auf diesen Client **und** Mapper `RTM` (`oidc-requested-tenant-mapper`), der `requested_tenant=` in den Claim `tenant` überträgt. Der Schalter, der token1 zu token2 macht |
-| Client `domain-5678` | confidential, reine Ziel-Domain des internen Exchange, Rollen `reader`/`writer`. **Kein** Service Account, **kein** Token Exchange |
-| Client `domain-1234` | zweite Ziel-Domain des internen Exchange, Rollen `reader`/`approver` |
+| Client `domain-5678` | confidential, reine Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice`. **Kein** Service Account, **kein** Token Exchange |
+| Client `domain-1234` | zweite Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice` |
 | Client `gateway` | Requester des internen **und** externen Exchange. **Standard token exchange** On, **Full scope allowed** Off, Scope `roles` als Default, `domain-5678`/`domain-1234`/`access-backend` als **Optional** |
 | Client `self-service-portal` | Client für den Password Grant des Lab-Users, Scope `to-gateway` als **Default** |
 | Client Scopes `domain-5678`, `domain-1234` | Role Scope Mappings auf die jeweiligen Rollen, Hardcoded-Claim-Mapper `domain=<Name>` |
@@ -287,8 +287,10 @@ sind — stehen in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Excha
 | IdP `frontend` | OIDC, ohne Discovery, `jwtAuthorizationGrantEnabled`, Max assertion expiration 600s |
 | Clients `e-rechnung`, `fahrtkostenerstattung` | Ziel-Dienste (Resource Server) mit Rollen `reader`/`writer` bzw. `reader`/`approver`. **Service accounts Off** — als reine Ziele brauchen sie keine eigene Identität |
 | Client Scopes gleichen Namens | Audience-Mapper **und** Role Scope Mappings. Die Mappings entscheiden, welche Rollen bei aktivem Scope überhaupt ins Token dürfen |
-| Client `domain-5678` | Requester. *JWT Authorization Grant* On, Allow-Liste `frontend`, **Full scope allowed Off**, beide Dienst-Scopes als **Optional** |
-| User `lab-user` | Ziel-Identität, verknüpft mit dem Frontend-`lab-user` (Federated Identity), Rollen `e-rechnung`=reader,writer und `fahrtkostenerstattung`=reader (bewusste Teilmenge) |
+| Client `domain-5678` | Requester. *JWT Authorization Grant* On, Allow-Liste `frontend`, **Full scope allowed Off**, beide Dienst-Scopes als **Optional**, Client Scope `tenant-restriction` als **Default** |
+| Client Scope `tenant-restriction` | Mapper 2 (`oidc-tenant-restriction-mapper`): verengt `resource_access` in token3 auf die Rollen der bestätigten Mandanten-Gruppe. Default am Requester, greift bei jedem token3 |
+| Gruppen `/domain-5678`, `/domain-1234` | Mandanten-Modell: tragen je Mandant die Client-Rollen **beider** Dienste (asymmetrischer Split). Alleinige Rollenquelle des Ziel-Users |
+| User `lab-user` | Ziel-Identität, verknüpft mit dem Frontend-`lab-user` (Federated Identity), **Mitglied beider Gruppen, keine direkten Rollen** (Rollen kommen über die Gruppen, Zuschnitt über Mapper 2) |
 
 ---
 
@@ -300,11 +302,11 @@ Ziel-Domain, dann extern auf das Backend.
 
 ```bash
 FE=http://localhost:8080
-BE=http://localhost:8081
+BE=http://localhost:8181
 SP_SECRET=lab-frontend-sp-secret
 GW_SECRET=lab-frontend-gateway-secret
 BS=lab-backend-domain-5678-secret
-BI=http://localhost:8081/realms/Backend-Microservices
+BI=http://localhost:8181/realms/Backend-Microservices
 
 jwt() {
   cut -d. -f2 <<<"$1" | python3 -c "
@@ -358,18 +360,19 @@ So sehen die Tokens bis token2 aus (gemessen, gekürzt — siehe die Bruno-Reque
 { "iss": "http://localhost:8080/realms/frontend", "azp": "gateway",
   "sub": "8eb1bec2-…" /* derselbe lab-user */, "aud": "domain-5678", "domain": "domain-5678",
   "scope": "domain-5678 profile email",
-  "resource_access": { "domain-5678": { "roles": ["reader", "writer"] } } }
+  "resource_access": { "domain-5678": { "roles": ["admin", "selfservice"] } } }
 
 // token2 - die Assertion, externer Exchange (02) via gateway
 { "iss": "http://localhost:8080/realms/frontend", "azp": "gateway",
-  "sub": "8eb1bec2-…", "aud": "http://localhost:8081/realms/Backend-Microservices",
+  "sub": "8eb1bec2-…", "aud": "http://localhost:8181/realms/Backend-Microservices",
   "scope": "access-backend profile email", "tenant": "domain-5678",
   "jti": "trrtte:1e1451ae-…" }
 
 // token3 - finales Access Token, jwt-bearer im Backend (03), scope=e-rechnung
-{ "iss": "http://localhost:8081/realms/Backend-Microservices", "azp": "domain-5678",
+{ "iss": "http://localhost:8181/realms/Backend-Microservices", "azp": "domain-5678",
   "sub": "80d521cb-…", "aud": "e-rechnung",
-  "scope": "e-rechnung profile email",
+  "scope": "e-rechnung profile email tenant-restriction",
+  "tenant": "domain-5678",
   "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } } }
 ```
 
@@ -378,12 +381,16 @@ Service-Account mehr. Und der Claim `tenant` (RTM-Mapper) trägt die Ziel-Domain
 `requested_tenant=` — unabhängig vom `audience=`-Parameter, der nur die `aud` filtert.
 
 In `token3` ist `sub` der **Backend-`lab-user`** (verknüpft mit dem Frontend-lab-user, eigene UUID,
-bei jedem Neuaufbau anders) statt wie früher `frontend-domain-5678`. Die Rollen sind eine Teilmenge:
-`e-rechnung`=reader,writer, aber `fahrtkostenerstattung`=**nur reader** (siehe
-[`docs/Ist-Konfiguration.md`](docs/Ist-Konfiguration.md)). **`token3` trägt (noch) keinen
-`tenant`-Claim** — der RTM-Mapper sitzt nur im Frontend auf `access-backend`; die Übernahme des
-`tenant` in token3 samt Rollen-Zuschnitt pro Mandant ist Aufgabe von Mapper 2 (Domain B), der noch
-nicht existiert. Werte oben gemessen (Keycloak 26.7.2, Stand dieses Setups).
+bei jedem Neuaufbau anders) statt wie früher `frontend-domain-5678`. **`token3` trägt jetzt einen
+bestätigten `tenant`-Claim und ist auf genau diesen Mandanten zugeschnitten** — das leistet Mapper 2
+(`oidc-tenant-restriction-mapper`, Domain B): Er liest den `tenant` aus der Assertion, prüft die
+Gruppenmitgliedschaft des Backend-Users und verengt `resource_access` auf die Rollen der bestätigten
+Mandanten-Gruppe (fail-closed ohne Treffer). Hier `tenant=domain-5678` → dessen Gruppenrollen für
+`e-rechnung` = reader,writer; mit `tenant=domain-1234` blieben nur `[reader]`. Details, alle
+gemessenen Fälle und die Quellcode-Belege:
+[`docs/Mapper2-Spezifikation.md`](docs/Mapper2-Spezifikation.md) und
+[`docs/Mapper2-Recherche.md`](docs/Mapper2-Recherche.md). Werte oben gemessen (Keycloak 26.7.2,
+Stand dieses Setups).
 
 ### Gegenproben
 
@@ -423,6 +430,7 @@ docker compose logs -f backend-keycloak
 | `invalid_grant: Invalid token audience` | die Assertion war nicht an diesen Realm adressiert |
 | `invalid_scope` | der Scope existiert nicht oder ist dem Requester nicht zugewiesen |
 | zu viele Rollen in token3 | **Full scope allowed** ist On, oder die Rollen stecken in den Default-Rollen des Realms |
+| token3 ohne Rollen und ohne `tenant`-Claim | Mapper 2 hat fail-closed: `tenant` fehlt in der Assertion, oder der Backend-User ist nicht Mitglied der genannten Mandanten-Gruppe |
 
 ---
 

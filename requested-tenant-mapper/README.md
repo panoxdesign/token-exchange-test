@@ -89,7 +89,7 @@ token2=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
   -d subject_token="$token1" \
   -d scope=access-backend \
-  -d audience=http://localhost:8081/realms/Backend-Microservices \
+  -d audience=http://localhost:8181/realms/Backend-Microservices \
   -d requested_tenant=domain-1234 \
   -d client_id=domain-5678 -d client_secret=lab-frontend-domain-5678-secret | jq -r .access_token)
 
