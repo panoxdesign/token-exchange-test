@@ -1,0 +1,79 @@
+info:
+  name: 05a Interner Exchange auf domain-5678
+  type: http
+  seq: 6
+
+http:
+  method: POST
+  url: "{{FE_URL}}/realms/{{FE_REALM}}/protocol/openid-connect/token"
+  body:
+    type: form-urlencoded
+    data:
+      - name: grant_type
+        value: urn:ietf:params:oauth:grant-type:token-exchange
+      - name: subject_token_type
+        value: urn:ietf:params:oauth:token-type:access_token
+      - name: subject_token
+        value: "{{token_sp}}"
+      - name: audience
+        value: "{{DOMAIN_5678}}"
+      - name: scope
+        value: "{{DOMAIN_5678}}"
+      - name: client_id
+        value: "{{GATEWAY_CLIENT}}"
+      - name: client_secret
+        value: "{{GATEWAY_SECRET}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: bru.setVar("token1", res.body.access_token);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |
+  Schritt 5a. Standard Token Exchange V2, aber diesmal komplett innerhalb des
+  Frontend-Realms: der gateway-Client tauscht das SP-User-Token aus Request 04
+  gegen ein Token mit den Rollen der Ziel-Domain domain-5678.
+
+  Beide Parameter sind Pflicht, und zwar aus verschiedenen Gruenden:
+
+  scope=domain-5678   aktiviert den gleichnamigen optionalen Client Scope am
+                       gateway. Darin stehen die Role Scope Mappings auf die
+                       Rollen der Ziel-Domain. Erst diese Rollen erzeugen ueber
+                       den eingebauten AudienceResolveProtocolMapper (Client
+                       Scope roles) die aud. Ohne scope= resolven keine
+                       Rollen, es entsteht keine aud, und der Request endet
+                       mit invalid_request: Requested audience not available:
+                       domain-5678.
+
+  audience=domain-5678  FILTERT nur. Er fuegt keine Audience hinzu, sondern
+                       schneidet aud und resource_access auf die angeforderte
+                       Domain zu (TokenManager.restrictRequestedAudience).
+                       Laesst man ihn weg, laeuft der Filter gar nicht - was
+                       hier nur deshalb unauffaellig bleibt, weil der gateway
+                       Full scope allowed Off hat.
+
+  azp zeigt den handelnden Client (gateway), aud den Dienst, fuer den das
+  Token gilt (domain-5678), sub die Identitaet - dieselbe Dreiteilung, die
+  SETUP.md fuer die Backend-Kette beschreibt.
+
+  Unterschied zur cross-realm Kette aus Request 02: das Ergebnis hier ist ein
+  normales Bearer-Token, kein Einmal-Ticket. Es laesst sich wiederverwenden,
+  es gibt kein Token reuse detected, und fuer die zweite Domain (Request 05b)
+  muss token_sp NICHT neu geholt werden - anders als bei der Assertion aus
+  Request 02, die pro Einloesung neu erzeugt werden muss.
+
+  Erwartung:
+    aud               domain-5678
+    azp               gateway
+    sub               <UUID des lab-user>   - derselbe wie in 04, die Identitaet bleibt
+    domain            domain-5678
+    scope             domain-5678 profile email
+    resource_access   { "domain-5678": { "roles": ["reader", "writer"] } }

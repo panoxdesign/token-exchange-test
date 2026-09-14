@@ -13,7 +13,7 @@
 set -uo pipefail
 
 FE="${FE:-http://localhost:8080}"
-BE="${BE:-http://localhost:8081}"
+BE="${BE:-http://localhost:8181}"
 FE_REALM="${FE_REALM:-frontend}"
 BE_REALM="${BE_REALM:-Backend-Microservices}"
 ADMIN_USER="${ADMIN_USER:-admin}"
@@ -27,7 +27,9 @@ SERVICES=(e-rechnung fahrtkostenerstattung)
 # Mandanten-Gruppen im Backend:  gruppe:dienst:rolle,rolle  (muss zu setup-realms.sh passen)
 BE_GROUPS=(
   "domain-5678:e-rechnung:writer,reader"
+  "domain-5678:fahrtkostenerstattung:reader,approver"
   "domain-1234:e-rechnung:reader"
+  "domain-1234:fahrtkostenerstattung:reader"
 )
 TARGET_GROUPS="${TARGET_GROUPS:-domain-5678,domain-1234}"
 
@@ -365,6 +367,22 @@ else
   done
 fi
 
+head_ "2. Mapper 2 (tenant-restriction) im Backend"
+TRSC=$(ba "/client-scopes" | jq --arg n "tenant-restriction" '.[] | select(.name==$n)')
+if [ -z "$TRSC" ]; then
+  bad "Client Scope 'tenant-restriction' fehlt" "ohne ihn greift Mapper 2 nicht"
+else
+  ok "Client Scope 'tenant-restriction' vorhanden"
+  jq -e '.protocolMappers // [] | any(.protocolMapper=="oidc-tenant-restriction-mapper")' <<<"$TRSC" >/dev/null \
+    && ok "Tenant-Restriction-Mapper (oidc-tenant-restriction-mapper) vorhanden" \
+    || bad "Tenant-Restriction-Mapper fehlt im Scope" "ohne ihn wird token3 nicht auf den Mandanten verengt"
+  if [ -n "${DU:-}" ]; then
+    ba "/clients/$DU/default-client-scopes" | jq -e --arg n "tenant-restriction" 'any(.name==$n)' >/dev/null \
+      && ok "Scope 'tenant-restriction' als Default an '$DOMAIN' zugewiesen" \
+      || bad "Scope 'tenant-restriction' nicht als Default an '$DOMAIN'" "sonst laeuft Mapper 2 nicht beim Bau von token3"
+  fi
+fi
+
 head_ "2. Ziel-User '$TARGET_USER'"
 TU=$(ba "/users?username=$(uri "$TARGET_USER")&exact=true" | jq '.[0] // empty')
 if [ -z "$TU" ]; then
@@ -386,8 +404,8 @@ else
   RM=$(ba "/users/$TUID/role-mappings")
   for SVC in "${SERVICES[@]}"; do
     RR=$(jq -r --arg c "$SVC" '.clientMappings[$c].mappings // [] | map(.name) | join(", ")' <<<"${RM:-{\}}")
-    [ -n "$RR" ] && ok "Rollen auf '$SVC': $RR" \
-      || bad "keine Rollen auf '$SVC'" "dann ist resource_access im Token leer"
+    [ -z "$RR" ] && ok "keine direkten Rollen auf '$SVC' (Rollen kommen ueber die Gruppe)" \
+      || bad "direkte Rollen auf '$SVC': $RR" "seit Mapper 2 sollen Rollen nur ueber die Mandanten-Gruppe kommen - direkte Rollen unterlaufen den tenant-Zuschnitt"
   done
 fi
 

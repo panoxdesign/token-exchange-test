@@ -3,6 +3,42 @@ info:
   type: http
   seq: 2
 
+http:
+  method: POST
+  url: "{{FE_URL}}/realms/{{FE_REALM}}/protocol/openid-connect/token"
+  body:
+    type: form-urlencoded
+    data:
+      - name: grant_type
+        value: urn:ietf:params:oauth:grant-type:token-exchange
+      - name: subject_token_type
+        value: urn:ietf:params:oauth:token-type:access_token
+      - name: subject_token
+        value: "{{token1}}"
+      - name: scope
+        value: "{{ACCESS_SCOPE}}"
+      - name: audience
+        value: "{{BACKEND_ISSUER}}"
+      - name: client_id
+        value: "{{GATEWAY_CLIENT}}"
+      - name: client_secret
+        value: "{{GATEWAY_SECRET}}"
+      - name: requested_tenant
+        value: domain-1234
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: bru.setVar("token2", res.body.access_token);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
 docs: |
   Schritt 2. Standard Token Exchange V2 im Frontend-Realm.
 
@@ -17,43 +53,9 @@ docs: |
   stehen.
 
   Erwartung:
-    aud    http://localhost:8081/realms/Backend-Microservices
+    aud    http://localhost:8181/realms/Backend-Microservices
     scope  access-backend profile email
     jti    gesetzt - jede Assertion gilt genau einmal
 
   Das Ergebnis ist KEIN Bearer-Token, sondern eine Assertion mit genau einem
   Zweck: Request 03. Fuer jeden Einloeseversuch wird eine neue gebraucht.
-
-http:
-  method: POST
-  url: "{{FE_URL}}/realms/{{FE_REALM}}/protocol/openid-connect/token"
-  body:
-    type: form-urlencoded
-    data:
-      - name: grant_type
-        value: "urn:ietf:params:oauth:grant-type:token-exchange"
-      - name: subject_token_type
-        value: "urn:ietf:params:oauth:token-type:access_token"
-      - name: subject_token
-        value: "{{token1}}"
-      - name: scope
-        value: "{{ACCESS_SCOPE}}"
-      - name: audience
-        value: "{{BACKEND_ISSUER}}"
-      - name: client_id
-        value: "{{DOMAIN_CLIENT}}"
-      - name: client_secret
-        value: "{{FE_DOMAIN_SECRET}}"
-  auth: inherit
-
-runtime:
-  scripts:
-    - type: after-response
-      code: |
-        bru.setVar("token2", res.body.access_token);
-
-settings:
-  encodeUrl: true
-  timeout: 0
-  followRedirects: true
-  maxRedirects: 5

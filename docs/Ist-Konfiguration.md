@@ -15,26 +15,26 @@ neuen Flows, die im letzten Abschnitt benannt sind.
 
 | Client | Zweck | Wichtige Attribute |
 |---|---|---|
-| `domain-5678` | Ziel-Domain des internen Exchange | confidential; `serviceAccountsEnabled=false`; `standard.token.exchange.enabled=false`; Rollen `reader`, `writer`; optionale Scopes u. a. **`access-backend`** (Altlast H, siehe unten) |
-| `domain-1234` | zweite Ziel-Domain | confidential; `serviceAccountsEnabled=false`; Rollen `reader`, `approver` |
+| `domain-5678` | Ziel-Domain des internen Exchange | confidential; `serviceAccountsEnabled=false`; `standard.token.exchange.enabled=false`; Rollen `admin`, `selfservice`; optionale Scopes u. a. **`access-backend`** (Altlast H, siehe unten) |
+| `domain-1234` | zweite Ziel-Domain | confidential; `serviceAccountsEnabled=false`; Rollen `admin`, `selfservice` |
 | `gateway` | Requester des internen **und** externen Exchange | confidential; `standard.token.exchange.enabled=true`; `fullScopeAllowed=false`; optionale Scopes `domain-5678`, `domain-1234`, `access-backend` |
 | `self-service-portal` | Password-Grant-Client des Lab-Users | confidential; `directAccessGrantsEnabled=true`; `fullScopeAllowed=false`; Default-Scope `to-gateway` |
-| `http://localhost:8081/realms/Backend-Microservices` (Name „backend") | reines Audience-Ziel für den externen Exchange | confidential; keine Flows aktiv |
+| `http://localhost:8181/realms/Backend-Microservices` (Name „backend") | reines Audience-Ziel für den externen Exchange | confidential; keine Flows aktiv |
 | `external-token-exchange` (**Altlast E**) | ungenutzter Exchange-Client | `fullScopeAllowed=true`; `standard.token.exchange.enabled=true`; optionaler Scope `access-backend`; von keinem Bruno-Request referenziert |
 
 ### Client Scopes
 
 | Scope | Protocol Mapper | Role Scope Mappings |
 |---|---|---|
-| `access-backend` | `audience` (`oidc-audience-mapper`) → `http://localhost:8081/realms/Backend-Microservices`; `RTM` (`oidc-requested-tenant-mapper`, `config:{}`) | — |
-| `domain-5678` | `domain` (`oidc-hardcoded-claim-mapper`) → `domain-5678` | `domain-5678`: reader, writer |
-| `domain-1234` | `domain` (`oidc-hardcoded-claim-mapper`) → `domain-1234` | `domain-1234`: approver, reader |
+| `access-backend` | `audience` (`oidc-audience-mapper`) → `http://localhost:8181/realms/Backend-Microservices`; `RTM` (`oidc-requested-tenant-mapper`, `config:{}`) | — |
+| `domain-5678` | `domain` (`oidc-hardcoded-claim-mapper`) → `domain-5678` | `domain-5678`: admin, selfservice |
+| `domain-1234` | `domain` (`oidc-hardcoded-claim-mapper`) → `domain-1234` | `domain-1234`: admin, selfservice |
 | `to-gateway` | `audience` (`oidc-audience-mapper`) → `gateway` | — |
 
 ### User `lab-user`
 
 - id `8eb1bec2-6c88-4b9a-83fd-d645ee1f2021`
-- Client-Rollen: `domain-5678`: reader, writer; `domain-1234`: approver, reader; `self-service-portal`:
+- Client-Rollen: `domain-5678`: admin, selfservice; `domain-1234`: admin, selfservice; `self-service-portal`:
   **`test`** (Altlast G, siehe unten)
 - keine Federated Identity — das ist der Ursprungs-User der Kette
 
@@ -50,7 +50,7 @@ neuen Flows, die im letzten Abschnitt benannt sind.
 
 | Client | Zweck | Wichtige Attribute |
 |---|---|---|
-| `domain-5678` | Requester, löst die Assertion ein | confidential; `oauth2.jwt.authorization.grant.enabled=true`; `oauth2.jwt.authorization.grant.idp=frontend`; `fullScopeAllowed=false`; optionale Scopes `e-rechnung`, `fahrtkostenerstattung` |
+| `domain-5678` | Requester, löst die Assertion ein | confidential; `oauth2.jwt.authorization.grant.enabled=true`; `oauth2.jwt.authorization.grant.idp=frontend`; `fullScopeAllowed=false`; optionale Scopes `e-rechnung`, `fahrtkostenerstattung`; **Default-Scope `tenant-restriction`** (Mapper 2) |
 | `e-rechnung` | Ziel-Dienst | `serviceAccountsEnabled=false`; Rollen `reader`, `writer` |
 | `fahrtkostenerstattung` | Ziel-Dienst | `serviceAccountsEnabled=false`; Rollen `reader`, `approver` |
 
@@ -60,14 +60,16 @@ neuen Flows, die im letzten Abschnitt benannt sind.
 |---|---|---|
 | `e-rechnung` | `audience` (`oidc-audience-mapper`) → `e-rechnung` | reader, writer |
 | `fahrtkostenerstattung` | `audience` (`oidc-audience-mapper`) → `fahrtkostenerstattung` | approver, reader |
+| `tenant-restriction` | `tenant-restriction` (`oidc-tenant-restriction-mapper`, Mapper 2, `config:{}`) | — |
 
 ### User `lab-user` (Ziel-User der bereinigten Kette)
 
 - id `b54323e7-8fd1-4071-84ea-2c8a3e2def11`
 - Federated Identity: `frontend` → `userId=8eb1bec2-6c88-4b9a-83fd-d645ee1f2021` (Frontend-`lab-user`),
   `userName=lab-user`
-- Direkte Client-Rollen: `e-rechnung`: reader, writer; `fahrtkostenerstattung`: **reader** (nicht
-  `approver` — bewusste Teilmenge, kein „alle Rollen jedes Dienstes")
+- Direkte Client-Rollen: **keine** — seit Mapper 2 sind die Mandanten-Gruppen die alleinige
+  Rollenquelle; `setup-realms.sh` entfernt direkte Dienst-Rollen aktiv (sie wären tenant-agnostisch
+  und würden den Zuschnitt unterlaufen)
 - **Gruppen-Mitgliedschaft:** `/domain-5678` **und** `/domain-1234` (siehe Abschnitt „Gruppen")
 
 ### User `frontend-domain-5678` (**Altlast F**, verwaist)
@@ -85,17 +87,19 @@ neuen Flows, die im letzten Abschnitt benannt sind.
 Der Backend-Realm modelliert die Mandanten als Gruppen; jede trägt die dienst-spezifischen
 Client-Rollen ihres Mandanten. Der Ziel-User `lab-user` ist Mitglied **beider** Gruppen.
 
-| Gruppe | Client-Rollen |
-|---|---|
-| `/domain-5678` | `e-rechnung`: writer, reader |
-| `/domain-1234` | `e-rechnung`: reader |
+| Gruppe | `e-rechnung` | `fahrtkostenerstattung` |
+|---|---|---|
+| `/domain-5678` | writer, reader | reader, approver |
+| `/domain-1234` | reader | reader |
 
-Beide führen aktuell **nur** `e-rechnung`-Rollen (kein `fahrtkostenerstattung`). Die Rollen des
-Ziel-Users kommen damit doppelt — einmal direkt am User, einmal über die Gruppen. Genau diese
-**Vereinigung** über beide Mandanten ist das Problem, das **Mapper 2** (Domain B, noch nicht gebaut)
-lösen soll: anhand des `tenant`-Claims aus token2 genau eine Mitgliedschaft bestätigen und nur deren
-Rollen in token3 ausgeben. `setup-realms.sh` legt Gruppen und Mitgliedschaft seit der Angleichung mit
-an (Arrays `BE_GROUPS` / `TARGET_GROUPS`).
+Jede Gruppe trägt die Rollen **beider** Dienste, asymmetrisch gesplittet je Mandant. Sie sind die
+**alleinige** Rollenquelle des Ziel-Users (keine direkten Rollen mehr). Der User ist Mitglied beider
+Gruppen — erst darüber entsteht die **Vereinigung** über beide Mandanten. Genau diese Vereinigung
+schneidet **Mapper 2** (`oidc-tenant-restriction-mapper`, Domain B, gebaut und verifiziert) zu:
+anhand des `tenant`-Claims aus token2 bestätigt er genau eine Mitgliedschaft und gibt nur deren
+Rollen in token3 aus (fail-closed ohne Treffer). Gemessene Fälle:
+[`Mapper2-Spezifikation.md`](Mapper2-Spezifikation.md). `setup-realms.sh` legt Gruppen, Rollen und
+Mitgliedschaft an (Arrays `BE_GROUPS` / `TARGET_GROUPS`) und entfernt direkte Rollen am Ziel-User.
 
 ## Der umgebaute Flow (04 → 05 → 02 → 03)
 

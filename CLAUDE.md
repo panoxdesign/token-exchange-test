@@ -3,6 +3,74 @@
 Hinweise für die Arbeit an diesem Repository. Das übergeordnete
 `/Users/patrick/projekte/docker/CLAUDE.md` (Sandbox-Umgebung, Netzwerk, Git) gilt zusätzlich.
 
+1. Erst denken, dann coden
+
+Nicht annehmen. Verwirrung nicht verstecken. Zielkonflikte aufzeigen.
+
+Vor der Umsetzung:
+
+    Benenne deine Annahmen explizit. Wenn du unsicher bist, frage nach.
+
+    Wenn es mehrere Interpretationen gibt, stelle sie vor – wähle nicht stillschweigend eine aus.
+
+    Wenn es einen einfacheren Ansatz gibt, sage es. Widersprich, wenn es angebracht ist.
+
+    Wenn etwas unklar ist, halte inne. Benenne, was verwirrend ist. Frage nach.
+
+2. Einfachheit an erster Stelle
+
+Minimaler Code, der das Problem löst. Nichts Spekulatives.
+
+    Keine Funktionen über das Hinaus, was gefordert wurde.
+
+    Keine Abstraktionen für Code, der nur an einer Stelle genutzt wird.
+
+    Keine "Flexibilität" oder "Konfigurierbarkeit", nach der nicht gefragt wurde.
+
+    Keine Fehlerbehandlung für unmögliche Szenarien.
+
+    Wenn du 200 Zeilen schreibst und es auch 50 sein könnten, schreibe es um.
+
+Frage dich: "Würde ein Senior Engineer sagen, dass das zu kompliziert ist?" Wenn ja, vereinfache es.
+3. Punktgenaue Änderungen
+
+Rühre nur an, was du musst. Räume nur deinen eigenen Mess auf.
+
+Beim Bearbeiten von bestehendem Code:
+
+    "Verbessere" keinen angrenzenden Code, keine Kommentare oder Formatierungen.
+
+    Refactore nichts, was nicht kaputt ist.
+
+    Passe dich dem bestehenden Stil an, selbst wenn du es anders machen würdest.
+
+    Wenn dir unbeteiligter, toter Code auffällt, erwähne ihn – lösche ihn nicht.
+
+Wenn deine Änderungen ungenutzten Code hinterlassen:
+
+    Entferne Imports, Variablen oder Funktionen, die durch DEINE Änderungen nutzlos wurden.
+
+    Entferne keinen bereits zuvor vorhandenen toten Code, außer du wirst darum gebeten.
+
+Der Test: Jede geänderte Zeile muss sich direkt auf die Anfrage des Nutzers zurückführen lassen.
+4. Zielorientierte Ausführung
+
+Kriterien für Erfolg definieren. Schleife ausführen, bis es überprüft ist.
+
+Verwandle Aufgaben in überprüfbare Ziele:
+
+    "Validierung hinzufügen" → "Tests für ungültige Eingaben schreiben, dann dafür sorgen, dass sie bestehen"
+
+    "Bug beheben" → "Einen Test schreiben, der ihn reproduziert, dann dafür sorgen, dass er besteht"
+
+    "X refactoren" → "Sicherstellen, dass die Tests vorher und nachher bestehen"
+
+Bei mehrstufigen Aufgaben, erstelle einen kurzen Plan:
+
+1. [Schritt] → überprüfen: [Check]
+2. [Schritt] → überprüfen: [Check]
+3. [Schritt] → überprüfen: [Check]
+
 ## Worum es geht
 
 Lernlabor für **Token Exchange zwischen zwei Keycloak-Instanzen** (Identity Chaining: Token Exchange
@@ -67,7 +135,7 @@ Diese Punkte haben schon Zeit gekostet und sind in `SETUP.md` ausführlich besch
   beiden Ziel-Dienste.
 - **`issuer` und `jwksUrl` des IdP nennen absichtlich verschiedene Hosts** — `localhost:8080` im
   Token, `frontend-keycloak:8080` für den JWKS-Abruf aus dem Backend-Container. Deshalb ist der
-  Discovery-Endpoint im Admin-UI unbenutzbar, und alle Requests müssen über `localhost:8080`/`:8081`
+  Discovery-Endpoint im Admin-UI unbenutzbar, und alle Requests müssen über `localhost:8080`/`:8181`
   laufen.
 - **Der Ziel-User heißt `frontend-<client>`, nicht `service-account-<client>`.** Letzteren Namen
   vergibt Keycloak selbst; die Federated Identity landet sonst am falschen User.

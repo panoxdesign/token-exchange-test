@@ -59,16 +59,18 @@ services:
   backend-keycloak:
     image: keycloak/keycloak:26.7.2
     ports:
-      - "8081:8080"
+      - "8181:8080"
+    volumes:
+      - ./tenant-restriction-mapper/target/tenant-restriction-mapper.jar:/opt/keycloak/providers/tenant-restriction-mapper.jar
     environment:
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
       - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
-      # 8081, weil diese Instanz von aussen unter localhost:8081 erreichbar ist. Der Wert landet
+      # 8181, weil diese Instanz von aussen unter localhost:8181 erreichbar ist. Der Wert landet
       # im Issuer der Backend-Tokens und muss dem aud-Claim der Assertion entsprechen.
       #
       # Intern lauscht Keycloak weiter auf 8080. Das Frontend muss das Backend nie erreichen -
-      # nur umgekehrt, fuer den JWKS-Abruf. Deshalb reicht das Mapping 8081:8080.
-      - KC_HOSTNAME=http://localhost:8081
+      # nur umgekehrt, fuer den JWKS-Abruf. Deshalb reicht das Mapping 8181:8080.
+      - KC_HOSTNAME=http://localhost:8181
       - KC_DB=postgres
       - KC_DB_URL_HOST=backend-keycloak-db
       - KC_DB_URL_DATABASE=keycloak-backend
