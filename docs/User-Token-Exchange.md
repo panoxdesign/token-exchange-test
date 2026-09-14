@@ -25,7 +25,7 @@ User der `sub` gehört.
 ```
 Frontend (localhost:8080)                    Backend (localhost:8181)
 ─────────────────────────                    ────────────────────────
-lab-user            domain-5678               domain-5678  (Requester)
+lab-user            domain-5678               backend-requester  (Requester)
      │ Password Grant     │                        │ jwt-bearer + scope=e-rechnung
      ▼                    │                        ▼
   token1  ──token-exchange──►  token2  ───────────────►  token3
@@ -125,7 +125,7 @@ Nur **token1** ist neu. token2 und token3 sind wortgleich mit `SETUP.md`.
 FE=http://localhost:8080
 BE=http://localhost:8181
 FS=lab-frontend-domain-5678-secret
-BS=lab-backend-domain-5678-secret
+BS=lab-backend-requester-secret
 BI=http://localhost:8181/realms/Backend-Microservices
 
 # token1 - NEU: Password Grant statt client_credentials
@@ -148,7 +148,7 @@ token3=$(curl -s -X POST "$BE/realms/Backend-Microservices/protocol/openid-conne
   -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer \
   -d assertion="$token2" \
   -d scope=e-rechnung \
-  -d client_id=domain-5678 -d client_secret="$BS" | jq -r .access_token)
+  -d client_id=backend-requester -d client_secret="$BS" | jq -r .access_token)
 ```
 
 Für `scope=fahrtkostenerstattung` **token2 neu holen** — dieselbe Regel wie im Service-Account-Flow:
@@ -196,10 +196,10 @@ gekürzt (`exp`/`iat`/`typ`/`acr`/`sid`/Profil-Claims weggelassen).
   "jti": "onrtte:5befe217-…"            // Präfix onrtte: — anders als beim SA-Flow
 }
 
-// token3 - JWT-Bearer, scope=e-rechnung, client domain-5678
+// token3 - JWT-Bearer, scope=e-rechnung, client backend-requester
 {
   "iss": "http://localhost:8181/realms/Backend-Microservices",
-  "azp": "domain-5678",
+  "azp": "backend-requester",
   "sub": "75ab5574-…",                 // = frontend-lab-user im Backend, NEUER sub
   "aud": "e-rechnung",
   "scope": "email e-rechnung profile",

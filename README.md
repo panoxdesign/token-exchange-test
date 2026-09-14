@@ -7,7 +7,7 @@ einen von zwei Ziel-Diensten.
 ```
 Frontend (localhost:8080)              Backend (localhost:8181)
 ─────────────────────────              ────────────────────────
-domain-5678  (Service Account)         domain-5678  (Requester)
+domain-5678  (Service Account)         backend-requester  (Requester)
      │ client_credentials                   │ jwt-bearer + scope=e-rechnung
      ▼                                      ▼
   token1  ──token-exchange──►  token2  ───────────────►  token3

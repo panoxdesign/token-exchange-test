@@ -20,6 +20,7 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin}"
 
 DOMAIN="${DOMAIN:-domain-5678}"
+BE_REQUESTER="${BE_REQUESTER:-backend-requester}"
 IDP_ALIAS="${IDP_ALIAS:-frontend}"
 ACCESS_SCOPE="${ACCESS_SCOPE:-access-backend}"
 TARGET_USER="${TARGET_USER:-lab-user}"
@@ -343,12 +344,12 @@ for SVC in "${SERVICES[@]}"; do
     || bad "Scope '$SVC' hat keine Role Scope Mappings" "ohne die filtert der Scope keine Rollen"
 done
 
-head_ "2. Requester-Client '$DOMAIN'"
-D=$(ba "/clients?clientId=$(uri "$DOMAIN")" | jq '.[0] // empty')
+head_ "2. Requester-Client '$BE_REQUESTER'"
+D=$(ba "/clients?clientId=$(uri "$BE_REQUESTER")" | jq '.[0] // empty')
 if [ -z "$D" ]; then
-  bad "Client '$DOMAIN' fehlt im Realm '$BE_REALM'"
+  bad "Client '$BE_REQUESTER' fehlt im Realm '$BE_REALM'"
 else
-  ok "Client '$DOMAIN' vorhanden"
+  ok "Client '$BE_REQUESTER' vorhanden"
   DU=$(jq -r '.id' <<<"$D")
   [ "$(jq -r '.publicClient' <<<"$D")" = "false" ] && ok "confidential" || bad "Client ist public"
   [ "$(jq -r '.attributes["oauth2.jwt.authorization.grant.enabled"] // "false"' <<<"$D")" = "true" ] \
@@ -378,8 +379,8 @@ else
     || bad "Tenant-Restriction-Mapper fehlt im Scope" "ohne ihn wird token3 nicht auf den Mandanten verengt"
   if [ -n "${DU:-}" ]; then
     ba "/clients/$DU/default-client-scopes" | jq -e --arg n "tenant-restriction" 'any(.name==$n)' >/dev/null \
-      && ok "Scope 'tenant-restriction' als Default an '$DOMAIN' zugewiesen" \
-      || bad "Scope 'tenant-restriction' nicht als Default an '$DOMAIN'" "sonst laeuft Mapper 2 nicht beim Bau von token3"
+      && ok "Scope 'tenant-restriction' als Default an '$BE_REQUESTER' zugewiesen" \
+      || bad "Scope 'tenant-restriction' nicht als Default an '$BE_REQUESTER'" "sonst laeuft Mapper 2 nicht beim Bau von token3"
   fi
 fi
 

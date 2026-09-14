@@ -20,7 +20,10 @@ variables:
     description: Optionaler Scope im Frontend, aktiviert den Audience-Mapper
   - name: DOMAIN_CLIENT
     value: domain-5678
-    description: heisst in beiden Realms gleich, sind aber zwei Clients
+    description: Frontend-Client - Ziel-Domain des internen Exchange
+  - name: BE_REQUESTER_CLIENT
+    value: backend-requester
+    description: Backend-Client, loest die Assertion per jwt-bearer ein (baut token3)
   - name: SVC_ERECHNUNG
     value: e-rechnung
     description: ""
@@ -48,9 +51,9 @@ variables:
   - name: FE_DOMAIN_SECRET
     value: lab-frontend-domain-5678-secret
     description: Secret von domain-5678 im Frontend-Realm
-  - name: BE_DOMAIN_SECRET
-    value: lab-backend-domain-5678-secret
-    description: Secret von domain-5678 im Backend-Realm
+  - name: BE_REQUESTER_SECRET
+    value: lab-backend-requester-secret
+    description: Secret von backend-requester im Backend-Realm
   - name: GATEWAY_SECRET
     value: lab-frontend-gateway-secret
     description: Secret des Gateway-Clients im Frontend-Realm

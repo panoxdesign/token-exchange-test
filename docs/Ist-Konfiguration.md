@@ -50,7 +50,7 @@ neuen Flows, die im letzten Abschnitt benannt sind.
 
 | Client | Zweck | Wichtige Attribute |
 |---|---|---|
-| `domain-5678` | Requester, löst die Assertion ein | confidential; `oauth2.jwt.authorization.grant.enabled=true`; `oauth2.jwt.authorization.grant.idp=frontend`; `fullScopeAllowed=false`; optionale Scopes `e-rechnung`, `fahrtkostenerstattung`; **Default-Scope `tenant-restriction`** (Mapper 2) |
+| `backend-requester` | Requester, löst die Assertion ein | confidential; `oauth2.jwt.authorization.grant.enabled=true`; `oauth2.jwt.authorization.grant.idp=frontend`; `fullScopeAllowed=false`; optionale Scopes `e-rechnung`, `fahrtkostenerstattung`; **Default-Scope `tenant-restriction`** (Mapper 2) |
 | `e-rechnung` | Ziel-Dienst | `serviceAccountsEnabled=false`; Rollen `reader`, `writer` |
 | `fahrtkostenerstattung` | Ziel-Dienst | `serviceAccountsEnabled=false`; Rollen `reader`, `approver` |
 
@@ -108,7 +108,7 @@ Mitgliedschaft an (Arrays `BE_GROUPS` / `TARGET_GROUPS`) und entfernt direkte Ro
 05  gateway              --(interner Exchange, scope/audience=domain-5678)-> token1  (aud: domain-5678)
 02  gateway              --(externer Exchange, scope=access-backend,
                              audience=<Backend-Issuer>, requested_tenant=domain-5678)---> token2 (Assertion)
-03  domain-5678 (Backend) --(jwt-bearer, assertion=token2)------> token3    (aud: e-rechnung | fahrtkostenerstattung)
+03  backend-requester (Backend) --(jwt-bearer, assertion=token2)------> token3    (aud: e-rechnung | fahrtkostenerstattung)
 ```
 
 Der entscheidende Unterschied zur Vorgängerfassung: `sub` von token1 und token2 ist der
