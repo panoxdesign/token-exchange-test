@@ -1,17 +1,18 @@
 # Token Exchange zwischen zwei Keycloak-Instanzen
 
-Ein Service-Account-Client im **Frontend-Keycloak** tauscht sein Token gegen ein Token des
-**Backend-Keycloak**, zugeschnitten auf genau einen von zwei Ziel-Diensten.
+Ein Nutzer meldet sich im **Frontend-Keycloak** per Password Grant an, ein Gateway tauscht sein
+Token intern auf eine Ziel-Domain zu und dann extern gegen ein Token des **Backend-Keycloak**,
+zugeschnitten auf genau einen von zwei Ziel-Diensten.
 
 ```
-Frontend (localhost:8080)              Backend (localhost:8181)
-─────────────────────────              ────────────────────────
-domain-5678  (Service Account)         backend-requester  (Requester)
-     │ client_credentials                   │ jwt-bearer + scope=e-rechnung
-     ▼                                      ▼
-  token1  ──token-exchange──►  token2  ───────────────►  token3
-                            (Assertion)                  aud: e-rechnung
-                                                         roles: reader, writer
+Frontend (localhost:8080)                              Backend (localhost:8181)
+─────────────────────────                              ────────────────────────
+lab-user (Password Grant, self-service-portal)         backend-requester  (Requester)
+     │                                                       │ jwt-bearer + scope=e-rechnung
+     ▼                                                       ▼
+  token_sp ──gateway, exchange──► token1 ──gateway, exchange──► token2 ──────────────► token3
+                  (aud: domain-5678)              (Assertion)                        aud: e-rechnung
+                                                                                      roles: reader, writer
 ```
 
 Mit `scope=fahrtkostenerstattung` liefert derselbe Aufruf ein Token für den anderen Dienst.
@@ -42,7 +43,7 @@ geschaltete Bausteine:
 
 | Schritt | Wo | Grant | Ergebnis |
 |---|---|---|---|
-| 1 | Frontend | `client_credentials` | **token1** — gewöhnliches Service-Account-Token |
+| 1 | Frontend | `password` | **token1** — gewöhnliches Token des Nutzers |
 | 2 | Frontend | `…:grant-type:token-exchange` | **token2** — JWT-*Assertion* für das Backend |
 | 3 | Backend | `…:grant-type:jwt-bearer` | **token3** — Access Token des Backends |
 
@@ -82,10 +83,9 @@ nicht einloggen, also setzt `setup-realms.sh` sie über die Admin-API.
 Daher tragen token1/token2 einen anderen `sub` als token3: dieselbe Identität, zwei Realms, zwei IDs.
 Die Federated Identity ist das Wörterbuch dazwischen.
 
-Dass hier überhaupt ein Service Account steht, ist eine Wahl, keine Notwendigkeit: Dieselbe Kette
-läuft unverändert mit einem menschlichen User als Subjekt — nur token1 entsteht dann per Password
-Grant statt `client_credentials`, und im Backend braucht es einen zweiten Ziel-User. Schritt für
-Schritt in [`docs/User-Token-Exchange.md`](docs/User-Token-Exchange.md).
+In diesem Lab ist das Subjekt bereits ein menschlicher User (`lab-user`, Password Grant über
+`self-service-portal`) statt eines Service Accounts — dieselbe Kette liefe unverändert auch mit
+einem Service Account als Subjekt, dann über `client_credentials` statt Password Grant.
 
 > **Namensfalle:** Der Ziel-User heißt `frontend-domain-5678`, bewusst **nicht**
 > `service-account-domain-5678`. Diesen Namen vergibt Keycloak selbst. Und weil
@@ -297,9 +297,8 @@ sind — stehen in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Excha
 
 ## Die Kette durchlaufen
 
-Entweder mit den Bruno-Requests `04` → `05a` → `02` → `03a`/`03b`, oder in der Shell. Anders als in
-der ursprünglichen Fassung tauscht **derselbe Client (`gateway`)** zweimal: erst intern auf die
-Ziel-Domain, dann extern auf das Backend.
+Entweder mit den Bruno-Requests `04` → `05a` → `02` → `03a`/`03b`, oder in der Shell. **Derselbe
+Client (`gateway`)** tauscht zweimal: erst intern auf die Ziel-Domain, dann extern auf das Backend.
 
 ```bash
 FE=http://localhost:8080
@@ -377,10 +376,10 @@ So sehen die Tokens bis token2 aus (gemessen, gekürzt — siehe die Bruno-Reque
   "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } } }
 ```
 
-Neu gegenüber der Vorgängerfassung: `sub` in token2 ist jetzt der **Frontend-lab-user**, kein
-Service-Account mehr. Und der Claim `tenant` (RTM-Mapper) trägt den `domain`-Claim aus **token1
-selbst** (dem subject_token des Exchange) — unabhängig vom `audience=`-Parameter, der nur die `aud`
-filtert, und ohne einen vom Aufrufer frei wählbaren Request-Parameter.
+`sub` in token2 ist der **Frontend-lab-user**, kein Service-Account. Der Claim `tenant`
+(RTM-Mapper) trägt den `domain`-Claim aus **token1 selbst** (dem subject_token des Exchange) —
+unabhängig vom `audience=`-Parameter, der nur die `aud` filtert, und ohne einen vom Aufrufer frei
+wählbaren Request-Parameter.
 
 > **Warum das sicher ist.** `domain` in token1 stammt aus einem Hardcoded-Claim-Mapper auf dem
 > Domain-Scope (`domain-5678`/`domain-1234`), der wiederum über die echten Rollen des Users
@@ -488,7 +487,7 @@ docker compose logs -f backend-keycloak
 
 ## Quellen
 
-Verifiziert gegen Keycloak 26.7.0.
+Verifiziert gegen Keycloak 26.7.2.
 
 - [OAuth Identity and Authorization Chaining Across Domains](https://www.keycloak.org/securing-apps/oauth-identity-authorization-chaining-across-domains) — das Referenz-Setup, dort mit einem menschlichen User und zwei Realms auf einem Server
 - [Configuring and using token exchange](https://www.keycloak.org/securing-apps/token-exchange)

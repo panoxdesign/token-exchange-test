@@ -1,5 +1,9 @@
 # Autorisierung im Mandantensystem – Referenzdokumentation
 
+> **Archiv-Hinweis:** Dieses Dokument ist archivierter Produkt-Designraum, kein Lab-Stand. §7
+> „Cross-Keycloak Token Exchange nicht umsetzbar" ist durch das inzwischen gebaute Lab **widerlegt**
+> — siehe [`SETUP.md`](../../SETUP.md). Inhalte sonst unverändert.
+
 > **Zweck dieses Dokuments:** Referenzdokumentation des Autorisierungs-Designs. Es beschreibt den festen Rahmen (Kontext, Token-Aufbau, Grundprinzipien) und die **Bausteine**, aus denen die konkrete Lösung zusammengesetzt wird. Die Bausteine sind nach Funktion gegliedert – nicht als flache Liste konkurrierender „Ansätze", sondern als kombinierbare Teile.
 
 ---

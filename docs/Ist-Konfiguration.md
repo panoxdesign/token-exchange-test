@@ -107,14 +107,14 @@ Mitgliedschaft an (Arrays `BE_GROUPS` / `TARGET_GROUPS`) und entfernt direkte Ro
 04  self-service-portal --(Password Grant)--------------------> token_sp   (aud: gateway)
 05  gateway              --(interner Exchange, scope/audience=domain-5678)-> token1  (aud: domain-5678)
 02  gateway              --(externer Exchange, scope=access-backend,
-                             audience=<Backend-Issuer>, requested_tenant=domain-5678)---> token2 (Assertion)
+                             audience=<Backend-Issuer>)---> token2 (Assertion, tenant aus token1.domain)
 03  backend-requester (Backend) --(jwt-bearer, assertion=token2)------> token3    (aud: e-rechnung | fahrtkostenerstattung)
 ```
 
 Der entscheidende Unterschied zur Vorgängerfassung: `sub` von token1 und token2 ist der
 **Frontend-lab-user** (`8eb1bec2-…`), kein Service-Account mehr. `gateway` ist jetzt der Requester
 beider Exchange-Schritte — des internen auf die Ziel-Domain und des externen auf das Backend. Der
-neue Claim `tenant` in token2 (RTM-Mapper) trägt die per `requested_tenant=` gewählte Ziel-Domain,
+Claim `tenant` in token2 (RTM-Mapper) leitet sich aus dem `domain`-Claim von **token1 selbst** ab,
 unabhängig vom `audience=`-Parameter, der nur `aud`/`resource_access` filtert.
 
 ## Bekannte Altlasten in der laufenden Instanz
