@@ -76,9 +76,9 @@ ist. Er heißt `service-account-<client-id>`.
 
 Im Backend braucht die Kette deshalb ebenfalls einen User, an den sie andocken kann. Der JWT
 Authorization Grant sucht ihn über eine **Federated Identity** und legt ihn **nicht** an — fehlt er,
-antwortet Keycloak mit `User not found` (`JWTAuthorizationGrantType.java:139`). Bei einem Menschen
-entstünde diese Verknüpfung beim ersten Browser-Login über den IdP; ein Service Account kann sich
-nicht einloggen, also setzt `setup-realms.sh` sie über die Admin-API.
+antwortet Keycloak mit `User not found` (`JWTAuthorizationGrantType.java:139`). Normalerweise
+entstünde diese Verknüpfung beim ersten Browser-Login des Nutzers über den IdP; das geskriptete Lab
+löst keinen solchen Login aus, also setzt `setup-realms.sh` sie über die Admin-API.
 
 Daher tragen token1/token2 einen anderen `sub` als token3: dieselbe Identität, zwei Realms, zwei IDs.
 Die Federated Identity ist das Wörterbuch dazwischen.
@@ -87,11 +87,11 @@ In diesem Lab ist das Subjekt bereits ein menschlicher User (`lab-user`, Passwor
 `self-service-portal`) statt eines Service Accounts — dieselbe Kette liefe unverändert auch mit
 einem Service Account als Subjekt, dann über `client_credentials` statt Password Grant.
 
-> **Namensfalle:** Der Ziel-User heißt `frontend-domain-5678`, bewusst **nicht**
-> `service-account-domain-5678`. Diesen Namen vergibt Keycloak selbst. Und weil
+> **Namensfalle:** Der Ziel-User ist hier `lab-user`. Die Falle steckt im Lookup: weil
 > `GET /users?username=…&exact=true` Service Accounts mitliefert (`UsersResource.java:364`), die
-> Users-Liste der Konsole aber nicht (Zeile 327/368), hängt man die Verknüpfung sonst versehentlich
-> an den Service Account eines Backend-Clients — und erbt dessen Rollen.
+> Users-Liste der Konsole aber nicht (Zeile 327/368), hängt man die Federated Identity sonst
+> versehentlich an den Service Account eines Backend-Clients — und erbt dessen Rollen.
+> `setup-realms.sh` bricht deshalb ab, wenn der gewählte Ziel-User ein Service Account ist.
 
 ### 2. Die Assertion zielt auf den Realm, nicht auf einen Client
 
