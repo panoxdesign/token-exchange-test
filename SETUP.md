@@ -57,6 +57,12 @@ Beide Bausteine sind in 26.7 offiziell supported — **kein** Preview-Feature, k
 > technisch Token Exchange **plus** JWT Authorization Grant. Der alte einzelne Request mit
 > `subject_issuer` (Legacy Token Exchange V1) kann das zwar, ist aber deprecated.
 
+Dass V2 ausschließlich realm-intern arbeitet, lässt sich auch **ohne** zweiten Keycloak vorführen:
+`setup-realms.sh` baut im selben Frontend-Realm eine zweite, unabhängige Kette auf — ein Gateway
+tauscht das Token eines Self-Service-Portals gegen ein auf eine Domain zugeschnittenes Token. Kein
+IdP, kein gespiegelter User, dafür ein normales Bearer-Token statt des Einmal-Tickets aus Schritt 2
+oben. Beschrieben in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Exchange.md).
+
 ---
 
 ## Die fünf Dinge, die man wissen muss
@@ -75,6 +81,11 @@ nicht einloggen, also setzt `setup-realms.sh` sie über die Admin-API.
 
 Daher tragen token1/token2 einen anderen `sub` als token3: dieselbe Identität, zwei Realms, zwei IDs.
 Die Federated Identity ist das Wörterbuch dazwischen.
+
+Dass hier überhaupt ein Service Account steht, ist eine Wahl, keine Notwendigkeit: Dieselbe Kette
+läuft unverändert mit einem menschlichen User als Subjekt — nur token1 entsteht dann per Password
+Grant statt `client_credentials`, und im Backend braucht es einen zweiten Ziel-User. Schritt für
+Schritt in [`docs/User-Token-Exchange.md`](docs/User-Token-Exchange.md).
 
 > **Namensfalle:** Der Ziel-User heißt `frontend-domain-5678`, bewusst **nicht**
 > `service-account-domain-5678`. Diesen Namen vergibt Keycloak selbst. Und weil
@@ -185,36 +196,46 @@ docker compose exec backend-keycloak \
 ## Was angelegt wird
 
 ```
-FRONTEND-REALM  frontend                    BACKEND-REALM  Backend-Microservices
-──────────────────────────────              ─────────────────────────────────────
+FRONTEND-REALM  frontend                          BACKEND-REALM  Backend-Microservices
+──────────────────────────────                    ─────────────────────────────────────
 
-domain-5678                                 IdP "frontend"
-  Service Account: ON                         issuer  = FE-Realm-URL
-  Token Exchange:  ON                         jwksUrl = frontend-keycloak:8080/...
-  Scope access-backend (optional)             JWT Authorization Grant: ON
-      │                                              ▲
-      │ sub = SA-User ────────────────────────┐      │ prüft Signatur + iss
-      ▼                                       │      │
-  <backend-issuer-url>                        │   domain-5678  (Requester)
-  Client, nur Audience-Ziel                   │     JWT Auth Grant: ON
-      ▲                                       │     Full scope allowed: OFF
-      │ Audience-Mapper                       │     Scopes e-rechnung /
-  access-backend (Client Scope)               │            fahrtkostenerstattung
-                                              │            (beide optional)
-                                              │                 │
-                              federated       │                 │ scope= entscheidet
-                              identity        ▼                 ▼
-                                        frontend-domain-5678   e-rechnung
-                                          Rollen auf beiden      reader, writer
-                                          Ziel-Diensten        fahrtkostenerstattung
-                                                                 reader, approver
+self-service-portal                               IdP "frontend"
+  Password Grant, aud: gateway                       issuer  = FE-Realm-URL
+       │                                              jwksUrl = frontend-keycloak:8080/...
+       ▼                                              JWT Authorization Grant: ON
+gateway  (Requester, intern UND extern)                     ▲
+  Token Exchange: ON                                        │ prüft Signatur + iss
+       │ scope=domain-5678, sub bleibt lab-user       domain-5678  (Requester)
+       ▼                                                JWT Auth Grant: ON
+domain-5678  (Ziel-Domain)                              Full scope allowed: OFF
+  Rollen reader, writer                                 Scopes e-rechnung /
+       │                                                       fahrtkostenerstattung
+       │ zurueck an gateway:                                  (beide optional)
+       │ scope=access-backend,                                     │
+       │ requested_tenant=domain-5678                              │ scope= entscheidet
+       ▼                                                           ▼
+<backend-issuer-url>                              federated identity
+  Client, nur Audience-Ziel                               │
+       ▲                                                  ▼
+       │ Audience-Mapper + RTM                       lab-user            e-rechnung
+access-backend (Client Scope)                     Rollen s.o.          reader, writer
+                                                                     fahrtkostenerstattung
+                                                                           reader
 ```
 
 > **`domain-5678` gibt es zweimal** — einmal pro Realm. Die beiden Clients haben nichts miteinander
-> zu tun außer dem Namen; kein Keycloak-Mechanismus verbindet sie. Im Frontend ist es der Service
-> Account, der das Ausgangstoken besitzt. Im Backend ist es der Requester, der die Assertion
-> einlöst — bewusst **ohne** eigenen Service Account, denn eine eigene Identität braucht er nicht.
-> Wessen Antrag er stellt, steht in der Assertion.
+> zu tun außer dem Namen; kein Keycloak-Mechanismus verbindet sie. Im Frontend ist es eine reine
+> Ziel-Domain des internen Exchange, ohne eigenen Service Account und ohne eigenes Token-Exchange-
+> Recht. Im Backend ist es der Requester, der die Assertion einlöst — bewusst **ohne** eigenen
+> Service Account, denn eine eigene Identität braucht er nicht. Wessen Antrag er stellt, steht in
+> der Assertion.
+>
+> Beide Exchange-Schritte der cross-realm Kette laufen über denselben Client: **`gateway`**. Er
+> tauscht zuerst das SP-Token gegen ein auf `domain-5678` zugeschnittenes Token (intern), und
+> dieses dann gegen die Assertion für das Backend (extern, mit `requested_tenant=domain-5678`).
+> Dazu kommt ein gleichnamiger **Client Scope** `domain-5678`. Der Name bezeichnet damit drei
+> Objekte — den Frontend-Client, den Backend-Client und den Frontend-Client-Scope. Beim Lesen der
+> Admin-Konsole hilft nur, jedes Mal zu fragen: Client oder Client Scope, und in welchem Realm?
 
 Vier Fragen, vier Zuständigkeiten:
 
@@ -228,13 +249,36 @@ Vier Fragen, vier Zuständigkeiten:
 Im Ergebnis-Token stehen diese drei Dinge nebeneinander und werden leicht verwechselt:
 `azp` ist der handelnde Client, `aud` der Dienst, für den das Token gilt, `sub` die Identität.
 
+Der interne Token Exchange über das Gateway ist keine unabhängige Nebenkette mehr: Er ist die
+**erste Stufe** derselben Kette, die auch das Backend erreicht. `gateway` tauscht das SP-Token
+zunächst gegen ein auf `domain-5678` (oder `domain-1234`) zugeschnittenes Token, danach — mit dem
+Scope `access-backend` und `requested_tenant=` — dasselbe Token erneut gegen die Assertion für das
+Backend.
+
+```
+self-service-portal ──token_sp (aud: gateway)──► gateway ──scope=/audience=──► token1
+                                                              (aud: domain-5678 oder domain-1234)
+```
+
+Ausführlich in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Exchange.md) — dort auch, wie
+die `aud` hier über Rollen statt über einen Audience-Mapper entsteht.
+
 ### Frontend-Realm `frontend`
 
 | Objekt | Zweck |
 |---|---|
 | Client `http://localhost:8081/realms/Backend-Microservices` | existiert nur als Audience-Ziel. Der Audience-Mapper kann nur die ID eines *existierenden* Clients in `aud` schreiben, und `aud` muss der Issuer des Empfängers sein — daher der URL-förmige Name |
-| Client Scope `access-backend` | Audience-Mapper auf diesen Client. Der Schalter, der token1 zu token2 macht |
-| Client `domain-5678` | confidential, *Service accounts* On, **Standard token exchange** On, `access-backend` als **Optional** |
+| Client Scope `access-backend` | Audience-Mapper auf diesen Client **und** Mapper `RTM` (`oidc-requested-tenant-mapper`), der `requested_tenant=` in den Claim `tenant` überträgt. Der Schalter, der token1 zu token2 macht |
+| Client `domain-5678` | confidential, reine Ziel-Domain des internen Exchange, Rollen `reader`/`writer`. **Kein** Service Account, **kein** Token Exchange |
+| Client `domain-1234` | zweite Ziel-Domain des internen Exchange, Rollen `reader`/`approver` |
+| Client `gateway` | Requester des internen **und** externen Exchange. **Standard token exchange** On, **Full scope allowed** Off, Scope `roles` als Default, `domain-5678`/`domain-1234`/`access-backend` als **Optional** |
+| Client `self-service-portal` | Client für den Password Grant des Lab-Users, Scope `to-gateway` als **Default** |
+| Client Scopes `domain-5678`, `domain-1234` | Role Scope Mappings auf die jeweiligen Rollen, Hardcoded-Claim-Mapper `domain=<Name>` |
+| Client Scope `to-gateway` | Audience-Mapper auf `gateway` |
+| User `lab-user` | trägt die Rollen beider Domains, meldet sich per Passwort-Grant an |
+
+Details zum internen Exchange — wie die `aud` entsteht, warum `scope=` und `audience=` beide Pflicht
+sind — stehen in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Exchange.md).
 
 ### Backend-Realm `Backend-Microservices`
 
@@ -244,18 +288,21 @@ Im Ergebnis-Token stehen diese drei Dinge nebeneinander und werden leicht verwec
 | Clients `e-rechnung`, `fahrtkostenerstattung` | Ziel-Dienste (Resource Server) mit Rollen `reader`/`writer` bzw. `reader`/`approver`. **Service accounts Off** — als reine Ziele brauchen sie keine eigene Identität |
 | Client Scopes gleichen Namens | Audience-Mapper **und** Role Scope Mappings. Die Mappings entscheiden, welche Rollen bei aktivem Scope überhaupt ins Token dürfen |
 | Client `domain-5678` | Requester. *JWT Authorization Grant* On, Allow-Liste `frontend`, **Full scope allowed Off**, beide Dienst-Scopes als **Optional** |
-| User `frontend-domain-5678` | Ziel-Identität, verknüpft mit dem Frontend-Service-Account, mit den Rollen beider Dienste |
+| User `lab-user` | Ziel-Identität, verknüpft mit dem Frontend-`lab-user` (Federated Identity), Rollen `e-rechnung`=reader,writer und `fahrtkostenerstattung`=reader (bewusste Teilmenge) |
 
 ---
 
 ## Die Kette durchlaufen
 
-Entweder mit den Bruno-Requests `01` → `02` → `03a`/`03b`, oder in der Shell:
+Entweder mit den Bruno-Requests `04` → `05a` → `02` → `03a`/`03b`, oder in der Shell. Anders als in
+der ursprünglichen Fassung tauscht **derselbe Client (`gateway`)** zweimal: erst intern auf die
+Ziel-Domain, dann extern auf das Backend.
 
 ```bash
 FE=http://localhost:8080
 BE=http://localhost:8081
-FS=lab-frontend-domain-5678-secret
+SP_SECRET=lab-frontend-sp-secret
+GW_SECRET=lab-frontend-gateway-secret
 BS=lab-backend-domain-5678-secret
 BI=http://localhost:8081/realms/Backend-Microservices
 
@@ -266,18 +313,31 @@ d = sys.stdin.read().strip()
 print(json.dumps(json.loads(base64.urlsafe_b64decode(d + '=' * (-len(d) % 4))), indent=2))"
 }
 
-token1=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
-  -d grant_type=client_credentials \
-  -d client_id=domain-5678 -d client_secret="$FS" | jq -r .access_token)
+# 04 - Password Grant des Lab-Users am self-service-portal
+token_sp=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
+  -d grant_type=password \
+  -d username=lab-user -d password=lab-user \
+  -d client_id=self-service-portal -d client_secret="$SP_SECRET" | jq -r .access_token)
 
+# 05a - interner Exchange via gateway auf die Ziel-Domain domain-5678
+token1=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
+  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
+  -d subject_token="$token_sp" \
+  -d audience=domain-5678 -d scope=domain-5678 \
+  -d client_id=gateway -d client_secret="$GW_SECRET" | jq -r .access_token)
+
+# 02 - externer Exchange via gateway auf das Backend, mit requested_tenant
 token2=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
   -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
   -d subject_token="$token1" \
   -d scope=access-backend \
   -d audience="$BI" \
-  -d client_id=domain-5678 -d client_secret="$FS" | jq -r .access_token)
+  -d requested_tenant=domain-5678 \
+  -d client_id=gateway -d client_secret="$GW_SECRET" | jq -r .access_token)
 
+# 03a - jwt-bearer im Backend via Requester domain-5678
 token3=$(curl -s -X POST "$BE/realms/Backend-Microservices/protocol/openid-connect/token" \
   -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer \
   -d assertion="$token2" \
@@ -287,52 +347,58 @@ token3=$(curl -s -X POST "$BE/realms/Backend-Microservices/protocol/openid-conne
 jwt "$token3"
 ```
 
-So sehen die drei Tokens aus (gemessen, gekürzt):
+So sehen die Tokens bis token2 aus (gemessen, gekürzt — siehe die Bruno-Requests `04`, `05a`, `02`):
 
 ```jsonc
-// token1 - noch ohne jeden Bezug zum Backend
-{ "iss": "http://localhost:8080/realms/frontend", "azp": "domain-5678",
-  "sub": "b613a682-…", "aud": "account", "scope": "profile email" }
+// token_sp - Password Grant, noch ohne jeden Bezug zur Ziel-Domain
+{ "iss": "http://localhost:8080/realms/frontend", "azp": "self-service-portal",
+  "sub": "8eb1bec2-…" /* lab-user */, "aud": "gateway", "scope": "to-gateway profile email" }
 
-// token2 - die Assertion, adressiert an den Backend-Realm
-{ "iss": "http://localhost:8080/realms/frontend", "azp": "domain-5678",
-  "sub": "b613a682-…", "aud": "http://localhost:8081/realms/Backend-Microservices",
-  "scope": "access-backend profile email", "jti": "trrtte:1e1451ae-…" }
+// token1 - interner Exchange (05a), zugeschnitten auf domain-5678
+{ "iss": "http://localhost:8080/realms/frontend", "azp": "gateway",
+  "sub": "8eb1bec2-…" /* derselbe lab-user */, "aud": "domain-5678", "domain": "domain-5678",
+  "scope": "domain-5678 profile email",
+  "resource_access": { "domain-5678": { "roles": ["reader", "writer"] } } }
 
-// token3 - vom Backend ausgestellt, zugeschnitten auf e-rechnung
+// token2 - die Assertion, externer Exchange (02) via gateway
+{ "iss": "http://localhost:8080/realms/frontend", "azp": "gateway",
+  "sub": "8eb1bec2-…", "aud": "http://localhost:8081/realms/Backend-Microservices",
+  "scope": "access-backend profile email", "tenant": "domain-5678",
+  "jti": "trrtte:1e1451ae-…" }
+
+// token3 - finales Access Token, jwt-bearer im Backend (03), scope=e-rechnung
 { "iss": "http://localhost:8081/realms/Backend-Microservices", "azp": "domain-5678",
-  "sub": "4b25e502-…", "aud": "e-rechnung", "scope": "profile email e-rechnung",
+  "sub": "80d521cb-…", "aud": "e-rechnung",
+  "scope": "e-rechnung profile email",
   "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } } }
 ```
 
-Der `sub`-Wechsel zwischen token2 und token3 ist der Übersetzungsschritt. Das `jti`-Präfix `trrtte:`
-verrät die **transiente Session** — deshalb gibt es hier auch kein Refresh Token. Läuft token3 ab,
-wird die Kette neu durchlaufen.
+Neu gegenüber der Vorgängerfassung: `sub` in token2 ist jetzt der **Frontend-lab-user**, kein
+Service-Account mehr. Und der Claim `tenant` (RTM-Mapper) trägt die Ziel-Domain aus
+`requested_tenant=` — unabhängig vom `audience=`-Parameter, der nur die `aud` filtert.
 
-Mit `scope=fahrtkostenerstattung` statt `scope=e-rechnung`:
-
-```jsonc
-{ "sub": "4b25e502-…", "aud": "fahrtkostenerstattung",
-  "resource_access": { "fahrtkostenerstattung": { "roles": ["approver", "reader"] } } }
-```
-
-Gleicher `sub`, anderer Zuschnitt. Ohne `scope` gibt es weder `aud` noch `resource_access` — das
-Minimum ist die leere Menge, nicht alles.
+In `token3` ist `sub` der **Backend-`lab-user`** (verknüpft mit dem Frontend-lab-user, eigene UUID,
+bei jedem Neuaufbau anders) statt wie früher `frontend-domain-5678`. Die Rollen sind eine Teilmenge:
+`e-rechnung`=reader,writer, aber `fahrtkostenerstattung`=**nur reader** (siehe
+[`docs/Ist-Konfiguration.md`](docs/Ist-Konfiguration.md)). **`token3` trägt (noch) keinen
+`tenant`-Claim** — der RTM-Mapper sitzt nur im Frontend auf `access-backend`; die Übernahme des
+`tenant` in token3 samt Rollen-Zuschnitt pro Mandant ist Aufgabe von Mapper 2 (Domain B), der noch
+nicht existiert. Werte oben gemessen (Keycloak 26.7.2, Stand dieses Setups).
 
 ### Gegenproben
 
 Zwei Fehlschläge, die zeigen, dass die Kette hält:
 
 ```bash
-# token1 direkt als Assertion  ->  invalid_grant: Invalid token audience
+# token1 direkt als Assertion  ->  invalid_grant: Invalid token audience (aud ist domain-5678, nicht das Backend)
 curl -s -X POST "$BE/realms/Backend-Microservices/protocol/openid-connect/token" \
   -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer -d assertion="$token1" \
   -d client_id=domain-5678 -d client_secret="$BS" | jq
 
-# dieselbe Assertion zweimal   ->  invalid_grant: Token reuse detected
+# dieselbe Assertion (token2) zweimal einloesen   ->  invalid_grant: Token reuse detected
 ```
 
-Die erste zeigt, wofür Schritt 2 da ist. Die zweite, dass jede Assertion genau einmal gilt.
+Die erste zeigt, wofür Schritt 02 da ist. Die zweite, dass jede Assertion genau einmal gilt.
 
 ---
 

@@ -20,6 +20,8 @@ services:
     image: keycloak/keycloak:26.7.2
     ports:
       - "8080:8080"
+    volumes:
+      - ./requested-tenant-mapper/target/requested-tenant-mapper.jar:/opt/keycloak/providers/requested-tenant-mapper.jar
     environment:
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
       - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
