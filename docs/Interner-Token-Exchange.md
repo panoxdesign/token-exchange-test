@@ -1,17 +1,19 @@
 # Interner Token Exchange über ein Gateway
 
-Zweiter, in sich geschlossener Mechanismus im Frontend-Realm: ein Self-Service-Portal tauscht das
-Token seines Users gegen ein auf eine Ziel-Domain zugeschnittenes Token, das ein Gateway ausstellt.
+Erste Stufe derselben cross-realm Kette aus `SETUP.md`, hier im Detail: Ein Self-Service-Portal
+tauscht das Token seines Users gegen ein auf eine Ziel-Domain zugeschnittenes Token, das ein
+Gateway ausstellt.
 
 ## Was das ist
 
 Standard Token Exchange V2, realm-intern: ein Aussteller, ein Realm. Kein Identity Provider, kein
 gespiegelter User — der Exchange bleibt vollständig innerhalb von `frontend`.
 
-Das ist die Abgrenzung zur cross-realm Kette aus `SETUP.md`: Dort tauscht Token Exchange V2 gegen
-eine JWT-*Assertion*, die erst der Backend-Keycloak über den JWT Authorization Grant gegen ein
-echtes Token einlöst — Identity Chaining über zwei Instanzen. Hier bleibt alles in einem Realm, und
-das ändert praktisch zwei Dinge:
+Das unterscheidet diese erste Stufe von der zweiten (dem externen Exchange gegen das Backend,
+ebenfalls über `gateway`): Dort tauscht Token Exchange V2 gegen eine JWT-*Assertion*, die erst der
+Backend-Keycloak über den JWT Authorization Grant gegen ein echtes Token einlöst — Identity
+Chaining über zwei Instanzen. Hier bleibt alles in einem Realm, und das ändert praktisch zwei
+Dinge:
 
 - Das Ergebnis ist ein **normales Bearer-Token**, kein Einmal-Ticket. Es lässt sich mehrfach
   verwenden; `Token reuse detected` gibt es hier nicht, weil kein `jti`-präfixiertes
@@ -30,7 +32,7 @@ lab-user
       │
       │ grant_type=password
       ▼
-self-service-portal                              domain-5678 (Doppelrolle, s.u.)
+self-service-portal                              domain-5678 (Ziel-Domain)
   Full scope allowed: OFF                           Rollen: admin, selfservice
   Scope to-gateway (Default)                             ▲
       │  Audience-Mapper ──► gateway                     │  Role Scope Mappings
@@ -63,7 +65,7 @@ Exchange), und die Ziel-Domains `domain-5678`/`domain-1234` (Audience-Ziele übe
 | Client `gateway` | Requester des internen Exchange. **Standard token exchange** On, **Full scope allowed** Off, Client Scope `roles` als Default (bringt den `AudienceResolveProtocolMapper` mit), `domain-5678`/`domain-1234` als **Optional** |
 | Client `self-service-portal` | Client für den Password Grant des Lab-Users. *Direct Access Grants* On, **Full scope allowed** Off, Client Scope `to-gateway` als **Default** |
 | Client `domain-1234` | reine Ziel-Domain, existiert nur wegen ihrer Rollen `admin`, `selfservice` |
-| Client `domain-5678` | **Doppelrolle.** Derselbe Client ist außen (cross-realm Kette aus `SETUP.md`) Service-Account-Client mit Token Exchange, und innen (dieser Mechanismus) reine Ziel-Domain mit den Rollen `admin`, `selfservice`. Zwei Zuständigkeiten, ein Client-Objekt |
+| Client `domain-5678` | reine Ziel-Domain dieser ersten Stufe, Rollen `admin`, `selfservice`. **Kein** Service Account, **kein** Token Exchange — Requester ist `gateway` |
 | Client Scope `to-gateway` | expliziter `oidc-audience-mapper` auf `gateway`, als Default am SP-Client |
 | Client Scope `domain-5678` | Role Scope Mappings auf die Rollen von `domain-5678`, `oidc-hardcoded-claim-mapper` `domain=domain-5678` |
 | Client Scope `domain-1234` | Role Scope Mappings auf die Rollen von `domain-1234`, `oidc-hardcoded-claim-mapper` `domain=domain-1234` |
@@ -91,7 +93,8 @@ Dieser Aufbau nutzt **beide, an verschiedenen Stellen**, und das ist Absicht:
   `AudienceResolveProtocolMapper` finden könnte.
 
 Der bewusst akzeptierte Preis, der klar dastehen muss — gemessen als Gegenprobe G7: Ein User ohne
-Rolle auf der Ziel-Domain bekommt **HTTP 400 `Requested audience not available`** — **nicht** ein Token mit korrekter `aud`
+Rolle auf der Ziel-Domain bekommt **400 `invalid_request` — „Requested audience not available"** —
+**nicht** ein Token mit korrekter `aud`
 und leerem `resource_access`. Fehlende Berechtigung sieht damit aus wie ein Konfigurationsfehler,
 nicht wie ein Zugriff, der sauber auf null Rechte zugeschnitten wurde. Wer das anders haben will,
 ergänzt im Domain-Scope einen eigenen `oidc-audience-mapper`; dann ist die `aud` von den Rollen
@@ -228,11 +231,10 @@ passiert, wenn man den Zuschnitt weglässt:
   `VERIFY_PROFILE` aus, obwohl am User selbst keine Required Action steht. Im Server-Log erscheint
   dann `error="resolve_required_actions"`. Das hat beim Aufbau real Zeit gekostet — `check-setup.sh`
   prüft `email`/`firstName`/`lastName` deshalb explizit, nicht nur `requiredActions`.
-- **`domain-5678` hat im Frontend-Realm jetzt zwei Rollen.** Einmal Besitzer des Ausgangstokens der
-  cross-realm Kette (Service-Account-Client mit Token Exchange), einmal Audience-Ziel des internen
-  Exchange (Ziel-Domain mit Rollen). Dazu kommt ein gleichnamiger Client Scope. Sauber trennen: das
-  eine ist der **Client** `domain-5678`, das andere der **Client Scope** `domain-5678` — der Client
-  Scope hat mit dem Client außer dem Namen nichts zu tun.
+- **Verwechslungsgefahr: Client vs. Client Scope `domain-5678`.** Beide heißen gleich, haben aber
+  außer dem Namen nichts miteinander zu tun — das eine ist der **Client** `domain-5678`
+  (Ziel-Domain mit den Rollen `admin`/`selfservice`), das andere der **Client Scope** `domain-5678`
+  (Role Scope Mappings + Hardcoded-Claim-Mapper `domain=domain-5678`).
 - Die aussagekräftige Fehlermeldung steht im Server-Log, nicht in der HTTP-Antwort:
   `docker compose logs -f frontend-keycloak`.
 - **Der Client Scope `roles` am `gateway` ist tragend.** Wird er entfernt, bricht die ganze Kette

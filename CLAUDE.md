@@ -137,8 +137,10 @@ Diese Punkte haben schon Zeit gekostet und sind in `SETUP.md` ausführlich besch
   Token, `frontend-keycloak:8080` für den JWKS-Abruf aus dem Backend-Container. Deshalb ist der
   Discovery-Endpoint im Admin-UI unbenutzbar, und alle Requests müssen über `localhost:8080`/`:8181`
   laufen.
-- **Der Ziel-User heißt `frontend-<client>`, nicht `service-account-<client>`.** Letzteren Namen
-  vergibt Keycloak selbst; die Federated Identity landet sonst am falschen User.
+- **Der Ziel-User im Backend ist `lab-user`, kein Service Account.** Die Falle steckt im Lookup:
+  `GET /users?username=…&exact=true` liefert auch Service Accounts mit, deshalb landet die Federated
+  Identity sonst leicht am Service Account eines Backend-Clients (falsche Rollen). `setup-realms.sh`
+  bricht ab, wenn der gewählte Ziel-User ein Service Account ist.
 - **Jede Assertion gilt genau einmal** (`Token reuse detected`). Für den zweiten Dienst token2 neu
   holen.
 - Das Admin-Token des `master`-Realms lebt **60 Sekunden**.
