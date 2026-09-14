@@ -18,7 +18,7 @@ Auf dem Host wird weder Java noch Maven benoetigt — der Build laeuft komplett 
 Aus dem Repo-Root:
 
 ```bash
-docker build --output type=local,dest=./target ./requested-tenant-mapper
+docker build --output type=local,dest=./requested-tenant-mapper/target ./requested-tenant-mapper
 ```
 
 Aus diesem Unterordner:
