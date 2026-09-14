@@ -19,7 +19,7 @@
 #     e-rechnung                 Ziel-Dienst mit Rollen reader, writer
 #     fahrtkostenerstattung      Ziel-Dienst mit Rollen reader, approver
 #     e-rechnung / fahrt...      Client Scopes: Audience-Mapper + Role Scope Mappings
-#     domain-5678                Requester-Client, loest die Assertion ein
+#     backend-requester          Requester-Client, loest die Assertion ein
 #     domain-5678 / domain-1234  Gruppen: tragen je Mandant die Rollen BEIDER Dienste
 #                                 (asymmetrischer Split), alleinige Rollenquelle
 #     tenant-restriction         Client Scope am Requester mit Mapper 2
@@ -43,6 +43,7 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin}"
 
 DOMAIN="${DOMAIN:-domain-5678}"
+BE_REQUESTER="${BE_REQUESTER:-backend-requester}"
 IDP_ALIAS="${IDP_ALIAS:-frontend}"
 ACCESS_SCOPE="${ACCESS_SCOPE:-access-backend}"
 TARGET_USER="${TARGET_USER:-lab-user}"
@@ -57,7 +58,7 @@ FE_JWKS="${FE_JWKS:-http://frontend-keycloak:8080/realms/$FE_REALM/protocol/open
 # Feste Lab-Secrets. Bewusst nicht generiert, damit die Bruno-Environment ohne
 # Abtippen laeuft. Fuer ein Testlabor in Ordnung, fuer sonst nichts.
 SEC_AUDIENCE="${SEC_AUDIENCE:-lab-backend-audience-secret}"
-SEC_BE_DOMAIN="${SEC_BE_DOMAIN:-lab-backend-domain-5678-secret}"
+SEC_BE_REQUESTER="${SEC_BE_REQUESTER:-lab-backend-requester-secret}"
 
 GATEWAY="${GATEWAY:-gateway}"
 SP_CLIENT="${SP_CLIENT:-self-service-portal}"
@@ -595,12 +596,12 @@ for entry in "${SERVICES[@]}"; do
 done
 
 # --- Requester-Client --------------------------------------------------------
-step "Requester-Client '$DOMAIN' im Backend"
+step "Requester-Client '$BE_REQUESTER' im Backend"
 
 # fullScopeAllowed:false ist entscheidend. Auf true (Keycloak-Default) landen ALLE
 # Rollen des Users im Token, unabhaengig vom angeforderten Scope - die Zuschneidung
 # ueber scope= waere wirkungslos und beide Dienste bekaemen dieselben Rechte.
-BE_DOMAIN_JSON=$(jq -nc --arg id "$DOMAIN" --arg sec "$SEC_BE_DOMAIN" --arg idp "$IDP_ALIAS" '{
+BE_DOMAIN_JSON=$(jq -nc --arg id "$BE_REQUESTER" --arg sec "$SEC_BE_REQUESTER" --arg idp "$IDP_ALIAS" '{
   clientId:$id, enabled:true, protocol:"openid-connect",
   publicClient:false, secret:$sec,
   standardFlowEnabled:false, directAccessGrantsEnabled:false,
@@ -609,7 +610,7 @@ BE_DOMAIN_JSON=$(jq -nc --arg id "$DOMAIN" --arg sec "$SEC_BE_DOMAIN" --arg idp 
   attributes:{
     "oauth2.jwt.authorization.grant.enabled":"true",
     "oauth2.jwt.authorization.grant.idp":$idp}}')
-BE_DOMAIN_UUID=$(ensure_client "$BE" "$BE_TOK" "$BE_REALM" "$DOMAIN" "$BE_DOMAIN_JSON")
+BE_DOMAIN_UUID=$(ensure_client "$BE" "$BE_TOK" "$BE_REALM" "$BE_REQUESTER" "$BE_DOMAIN_JSON")
 
 for entry in $SCOPE_IDS; do
   SVC="${entry%%:*}"; rest="${entry#*:}"; SID="${rest%%:*}"
@@ -739,7 +740,7 @@ cat <<EOF
     -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer \\
     -d assertion="\$token2" \\
     -d scope=e-rechnung \\
-    -d client_id=$DOMAIN -d client_secret=$SEC_BE_DOMAIN | jq -r .access_token)
+    -d client_id=$BE_REQUESTER -d client_secret=$SEC_BE_REQUESTER | jq -r .access_token)
 
   Fuer den zweiten Dienst token2 neu holen (Assertions gelten genau einmal)
   und scope=fahrtkostenerstattung setzen.

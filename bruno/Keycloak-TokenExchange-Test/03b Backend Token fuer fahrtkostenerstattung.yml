@@ -19,7 +19,7 @@ docs: |
 
   Erwartung:
     iss              http://localhost:8181/realms/Backend-Microservices
-    azp              domain-5678
+    azp              backend-requester
     sub              der verlinkte Backend-User - ANDERER Wert als in token1/2
     aud              fahrtkostenerstattung
     resource_access  fahrtkostenerstattung: approver, reader
@@ -43,9 +43,9 @@ http:
       - name: scope
         value: "{{SVC_FAHRTKOSTEN}}"
       - name: client_id
-        value: "{{DOMAIN_CLIENT}}"
+        value: "{{BE_REQUESTER_CLIENT}}"
       - name: client_secret
-        value: "{{BE_DOMAIN_SECRET}}"
+        value: "{{BE_REQUESTER_SECRET}}"
   auth: inherit
 
 runtime:

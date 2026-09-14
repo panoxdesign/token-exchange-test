@@ -92,8 +92,8 @@ transformAccessToken(token, ...):                    // Priorität 100
 
 ## Registrierung — wo greift Mapper 2 für token3?
 
-token3 wird für den **Backend-Requester-Client `domain-5678`** gebaut. Empfehlung: ein **eigener
-Client Scope** (z. B. `tenant-restriction`) mit Mapper 2, als **Default-Scope** an `domain-5678`.
+token3 wird für den **Backend-Requester-Client `backend-requester`** gebaut. Empfehlung: ein **eigener
+Client Scope** (z. B. `tenant-restriction`) mit Mapper 2, als **Default-Scope** an `backend-requester`.
 So läuft der Mapper bei **jedem** token3 — auch fail-closed, wenn gar kein Dienst-Scope aktiv ist —
 statt an je einen Dienst-Scope gehängt zu werden.
 

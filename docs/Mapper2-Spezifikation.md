@@ -17,7 +17,7 @@ setzt einen **bestätigten** `tenant`-Claim.
 
 - **`gateway`** (Frontend) — löst den externen Exchange aus und wählt den Mandanten per
   `requested_tenant=`. Mapper 1 (RTM) schreibt ihn als `tenant`-Claim in token2.
-- **`domain-5678`** (Backend-Requester) — löst die Assertion per jwt-bearer ein; für seinen Bau von
+- **`backend-requester`** (Backend-Requester) — löst die Assertion per jwt-bearer ein; für seinen Bau von
   token3 greift Mapper 2.
 - **Ziel-User `lab-user`** (Backend) — Mitglied beider Mandanten-Gruppen; die Gruppen sind seit
   Mapper 2 seine **alleinige** Rollenquelle.
@@ -69,7 +69,7 @@ setzt einen **bestätigten** `tenant`-Claim.
 - **Ziel-User `lab-user`:** **keine** direkten Client-Rollen mehr (aktiv entfernt); Rollen kommen
   ausschließlich über die Gruppen. Mitglied beider Gruppen.
 - **Neuer Client Scope `tenant-restriction`** mit Mapper 2, als **Default-Scope** am
-  Backend-Requester `domain-5678` — greift damit bei jedem token3.
+  Backend-Requester `backend-requester` — greift damit bei jedem token3.
 - **`docker-compose.yaml`:** JAR unter `backend-keycloak` gemountet
   (`/opt/keycloak/providers/tenant-restriction-mapper.jar`).
 
@@ -104,10 +104,10 @@ Fall **B** ist der Kernbeweis: die Vereinigung `[reader, writer]` wird auf die e
   "resource_access": null
 }
 
-// token3 - jwt-bearer, scope=e-rechnung, client domain-5678
+// token3 - jwt-bearer, scope=e-rechnung, client backend-requester
 {
   "iss": "http://localhost:8181/realms/Backend-Microservices",
-  "azp": "domain-5678",
+  "azp": "backend-requester",
   "sub": "ab474215-…",                 // = lab-user im Backend
   "aud": "e-rechnung",
   "scope": "profile email e-rechnung tenant-restriction",
