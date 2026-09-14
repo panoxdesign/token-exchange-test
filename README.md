@@ -67,7 +67,7 @@ Admin-Konsolen: <http://localhost:8080> und <http://localhost:8181>, jeweils `ad
 | `SETUP.md` | die Erklärung: Aufbau, Token-Claims, Stolperfallen, Troubleshooting |
 | `docs/Interner-Token-Exchange.md` | zweiter Mechanismus: interner Token Exchange über ein Gateway, ohne zweiten Keycloak |
 | `docs/User-Token-Exchange.md` | dieselbe cross-realm Kette mit einem echten User statt dem Service Account, händisch umgestellt |
-| `requested-tenant-mapper/` | Custom Protocol Mapper 1: schreibt `requested_tenant=` als `tenant`-Claim in token2 (Docker-Build) |
+| `requested-tenant-mapper/` | Custom Protocol Mapper 1: leitet den `tenant`-Claim in token2 aus dem `domain`-Claim des subject_token (token1) ab (Docker-Build) |
 | `tenant-restriction-mapper/` | Custom Protocol Mapper 2: verengt token3 auf die Rollen der bestätigten Mandanten-Gruppe (Docker-Build) |
 | `docs/Mapper2-Spezifikation.md` | Spezifikation + gemessener Nachweis von Mapper 2 |
 | `docs/Mapper2-Recherche.md` | Quellcode-Belege (Keycloak 26.7.2) zur Machbarkeit von Mapper 2 |

@@ -211,8 +211,8 @@ domain-5678  (Ziel-Domain)                              Full scope allowed: OFF
   Rollen admin, selfservice                             Scopes e-rechnung /
        │                                                       fahrtkostenerstattung
        │ zurueck an gateway:                                  (beide optional)
-       │ scope=access-backend,                                     │
-       │ requested_tenant=domain-5678                              │ scope= entscheidet
+       │ scope=access-backend                                      │
+       │ (RTM liest domain aus token1 selbst)                      │ scope= entscheidet
        ▼                                                           ▼
 <backend-issuer-url>                              federated identity
   Client, nur Audience-Ziel                               │
@@ -231,8 +231,9 @@ access-backend (Client Scope)                     Rollen s.o.          reader, w
 > Wessen Antrag er stellt, steht in der Assertion.
 >
 > Beide Exchange-Schritte der cross-realm Kette laufen über denselben Client: **`gateway`**. Er
-> tauscht zuerst das SP-Token gegen ein auf `domain-5678` zugeschnittenes Token (intern), und
-> dieses dann gegen die Assertion für das Backend (extern, mit `requested_tenant=domain-5678`).
+> tauscht zuerst das SP-Token gegen ein auf `domain-5678` zugeschnittenes Token (intern, token1),
+> und dieses dann gegen die Assertion für das Backend (extern, token2) — der RTM-Mapper liest dabei
+> den `domain`-Claim aus token1 selbst, ein Request-Parameter ist dafür nicht mehr nötig.
 > Beim Lesen der Admin-Konsole hilft trotzdem, jedes Mal zu fragen: Client oder Client Scope, und in
 > welchem Realm?
 
@@ -250,9 +251,10 @@ Im Ergebnis-Token stehen diese drei Dinge nebeneinander und werden leicht verwec
 
 Der interne Token Exchange über das Gateway ist keine unabhängige Nebenkette mehr: Er ist die
 **erste Stufe** derselben Kette, die auch das Backend erreicht. `gateway` tauscht das SP-Token
-zunächst gegen ein auf `domain-5678` (oder `domain-1234`) zugeschnittenes Token, danach — mit dem
-Scope `access-backend` und `requested_tenant=` — dasselbe Token erneut gegen die Assertion für das
-Backend.
+zunächst gegen ein auf `domain-5678` (oder `domain-1234`) zugeschnittenes Token (token1), danach —
+mit dem Scope `access-backend` — dasselbe Token erneut gegen die Assertion für das Backend
+(token2). Der `domain`-Claim aus token1 ist dabei der Trust-Anker für den `tenant`-Claim in
+token2 (RTM-Mapper, siehe Tabelle unten und Abschnitt „Die Kette durchlaufen").
 
 ```
 self-service-portal ──token_sp (aud: gateway)──► gateway ──scope=/audience=──► token1
@@ -267,7 +269,7 @@ die `aud` hier über Rollen statt über einen Audience-Mapper entsteht.
 | Objekt | Zweck |
 |---|---|
 | Client `http://localhost:8181/realms/Backend-Microservices` | existiert nur als Audience-Ziel. Der Audience-Mapper kann nur die ID eines *existierenden* Clients in `aud` schreiben, und `aud` muss der Issuer des Empfängers sein — daher der URL-förmige Name |
-| Client Scope `access-backend` | Audience-Mapper auf diesen Client **und** Mapper `RTM` (`oidc-requested-tenant-mapper`), der `requested_tenant=` in den Claim `tenant` überträgt. Der Schalter, der token1 zu token2 macht |
+| Client Scope `access-backend` | Audience-Mapper auf diesen Client **und** Mapper `RTM` (`oidc-requested-tenant-mapper`), der den `domain`-Claim des subject_token (token1) als Claim `tenant` in token2 schreibt. Der Schalter, der token1 zu token2 macht |
 | Client `domain-5678` | confidential, reine Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice`. **Kein** Service Account, **kein** Token Exchange |
 | Client `domain-1234` | zweite Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice` |
 | Client `gateway` | Requester des internen **und** externen Exchange. **Standard token exchange** On, **Full scope allowed** Off, Scope `roles` als Default, `domain-5678`/`domain-1234`/`access-backend` als **Optional** |
@@ -328,14 +330,14 @@ token1=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d audience=domain-5678 -d scope=domain-5678 \
   -d client_id=gateway -d client_secret="$GW_SECRET" | jq -r .access_token)
 
-# 02 - externer Exchange via gateway auf das Backend, mit requested_tenant
+# 02 - externer Exchange via gateway auf das Backend. RTM liest den domain-Claim
+# aus token1 (subject_token) selbst - kein Parameter noetig.
 token2=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
   -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
   -d subject_token="$token1" \
   -d scope=access-backend \
   -d audience="$BI" \
-  -d requested_tenant=domain-5678 \
   -d client_id=gateway -d client_secret="$GW_SECRET" | jq -r .access_token)
 
 # 03a - jwt-bearer im Backend via Requester backend-requester
@@ -376,8 +378,23 @@ So sehen die Tokens bis token2 aus (gemessen, gekürzt — siehe die Bruno-Reque
 ```
 
 Neu gegenüber der Vorgängerfassung: `sub` in token2 ist jetzt der **Frontend-lab-user**, kein
-Service-Account mehr. Und der Claim `tenant` (RTM-Mapper) trägt die Ziel-Domain aus
-`requested_tenant=` — unabhängig vom `audience=`-Parameter, der nur die `aud` filtert.
+Service-Account mehr. Und der Claim `tenant` (RTM-Mapper) trägt den `domain`-Claim aus **token1
+selbst** (dem subject_token des Exchange) — unabhängig vom `audience=`-Parameter, der nur die `aud`
+filtert, und ohne einen vom Aufrufer frei wählbaren Request-Parameter.
+
+> **Warum das sicher ist.** `domain` in token1 stammt aus einem Hardcoded-Claim-Mapper auf dem
+> Domain-Scope (`domain-5678`/`domain-1234`), der wiederum über die echten Rollen des Users
+> gated ist: `gateway` hat `Full scope allowed` Off, also bekommt token1 den Scope `domain-5678`
+> nur, wenn er angefordert wird **und** der User Rollen in `domain-5678` hat. Der Exchange
+> validiert token1 als subject_token, bevor Mapper laufen — RTM liest daraus nur, was der Exchange
+> bereits geprüft hat. Ein zusätzlicher `requested_tenant=`-Parameter existiert seit dieser Härtung
+> nicht mehr: Wer ihn trotzdem mitschickt, bewirkt nichts — der `tenant`-Claim in token2 folgt
+> ausschließlich `token1.domain`. Siehe Troubleshooting unten für den gemessenen Beleg.
+>
+> **Vorbehalt:** Dass die Signaturvalidierung des subject_token *vor* dem Mapper-Lauf passiert, ist
+> beobachtetes internes Verhalten von Keycloak 26.7 — kein dokumentierter API-Vertrag. Für die
+> gepinnte Version verlässlich (der praktische Beleg dafür sind der Positiv- und der
+> Fail-closed-Test unten), bei einem Major-Upgrade aber neu zu prüfen.
 
 In `token3` ist `sub` der **Backend-`lab-user`** (verknüpft mit dem Frontend-lab-user, eigene UUID,
 bei jedem Neuaufbau anders) statt wie früher `frontend-domain-5678`. **`token3` trägt jetzt einen
@@ -406,6 +423,30 @@ curl -s -X POST "$BE/realms/Backend-Microservices/protocol/openid-connect/token"
 
 Die erste zeigt, wofür Schritt 02 da ist. Die zweite, dass jede Assertion genau einmal gilt.
 
+### Der geschlossene Angriffsweg: `requested_tenant`-Spoofing
+
+Vor dieser Härtung transportierte der RTM-Mapper den Form-Parameter `requested_tenant` unverändert
+als `tenant`-Claim in token2 — ein Aufrufer im Kontext `domain-5678` konnte `requested_tenant=domain-1234`
+mitschicken und bekam, sofern der Ziel-User im Backend Mitglied der Gruppe `domain-1234` ist, dessen
+Rechte. Der Beweis, dass das jetzt wirkungslos ist (gemessen gegen einen kctest-Stack, Keycloak 26.7.2):
+
+```bash
+# token1 fuer domain-5678 holen (wie oben), dann Schritt 02 mit gespooftem Parameter
+token2=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
+  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
+  -d subject_token="$token1" \
+  -d scope=access-backend -d audience="$BI" \
+  -d requested_tenant=domain-1234 \
+  -d client_id=gateway -d client_secret="$GW_SECRET" | jq -r .access_token)
+```
+
+Gemessenes Ergebnis: `token2.tenant` ist `domain-5678` — **nicht** `domain-1234`. `requested_tenant`
+wird von der Server-Implementierung gar nicht mehr gelesen; der Claim folgt ausschließlich
+`token1.domain`. token3 trägt entsprechend weiter nur die `domain-5678`-Rollen für `e-rechnung`
+(`reader`, `writer`), nicht die (kleineren) `domain-1234`-Rollen. Vor der Härtung wäre
+`token2.tenant` hier `domain-1234` gewesen.
+
 ---
 
 ## Troubleshooting
@@ -430,6 +471,7 @@ docker compose logs -f backend-keycloak
 | `invalid_scope` | der Scope existiert nicht oder ist dem Requester nicht zugewiesen |
 | zu viele Rollen in token3 | **Full scope allowed** ist On, oder die Rollen stecken in den Default-Rollen des Realms |
 | token3 ohne Rollen und ohne `tenant`-Claim | Mapper 2 hat fail-closed: `tenant` fehlt in der Assertion, oder der Backend-User ist nicht Mitglied der genannten Mandanten-Gruppe |
+| `requested_tenant=…` im Request 02 ändert nichts an `token2.tenant` | erwartetes Verhalten seit der Härtung — RTM liest `tenant` ausschließlich aus `token1.domain`, ein Request-Parameter wird nicht mehr ausgewertet |
 
 ---
 

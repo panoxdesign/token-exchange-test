@@ -17,6 +17,12 @@ setzt einen **bestätigten** `tenant`-Claim.
 
 - **`gateway`** (Frontend) — löst den externen Exchange aus und wählt den Mandanten per
   `requested_tenant=`. Mapper 1 (RTM) schreibt ihn als `tenant`-Claim in token2.
+  > **Hinweis (Stand nach der RTM-Härtung):** `requested_tenant=` war der Eingabemechanismus zum
+  > Zeitpunkt dieser Spezifikation. Seit der Härtung von Mapper 1 (RTM) leitet dieser den
+  > `tenant`-Claim stattdessen aus `token1.domain` (dem subject_token des Exchange) ab — ein
+  > Request-Parameter existiert nicht mehr. Das hier beschriebene Verhalten von Mapper 2 selbst
+  > (Zuschnitt anhand des `tenant`-Claims) ist davon unberührt. Details: `SETUP.md`,
+  > `requested-tenant-mapper/README.md`.
 - **`backend-requester`** (Backend-Requester) — löst die Assertion per jwt-bearer ein; für seinen Bau von
   token3 greift Mapper 2.
 - **Ziel-User `lab-user`** (Backend) — Mitglied beider Mandanten-Gruppen; die Gruppen sind seit
@@ -78,6 +84,14 @@ setzt einen **bestätigten** `tenant`-Claim.
 Gemessen gegen Keycloak 26.7.2 im isolierten kctest-Stack, `./setup-realms.sh --recreate`,
 kompletter Flow (04 → 05 → 02 mit `requested_tenant` → 03 jwt-bearer). Alle sechs Fälle bestanden:
 
+> **Hinweis:** Die Spalte `requested_tenant` bildet den Eingabemechanismus zum Zeitpunkt dieser
+> Messung ab (unveränderte Rohwerte, kein Nacherfinden). Seit der RTM-Härtung kommt der
+> `tenant`-Claim, den Mapper 2 hier verarbeitet, aus `token1.domain` statt aus diesem Parameter —
+> die Werte in der Spalte entsprachen damals 1:1 dem resultierenden `tenant`-Claim, weil RTM den
+> Parameter seinerzeit ungeprüft übernahm. Mapper 2 selbst kennt `requested_tenant` nie, nur den
+> `tenant`-Claim der Assertion — insofern ist diese Tabelle weiterhin ein gültiger Nachweis für
+> Mapper 2.
+
 | Fall | `requested_tenant` | `scope` | token3.`resource_access` | token3.`tenant` |
 |---|---|---|---|---|
 | A | domain-5678 | e-rechnung | `e-rechnung: [reader, writer]` | domain-5678 |
@@ -91,6 +105,10 @@ Fall **B** ist der Kernbeweis: die Vereinigung `[reader, writer]` wird auf die e
 `[reader]` zugeschnitten. **E/F** belegen fail-closed.
 
 ### Gemessene Claims (kanonischer Fall A)
+
+> Gemessen vor der RTM-Härtung, mit `requested_tenant=domain-5678` als Eingabe. Der `tenant`-Claim
+> in token2 kommt seither aus `token1.domain` statt aus diesem Parameter; der gezeigte Claim-Wert
+> selbst ist unverändert gültig.
 
 ```jsonc
 // token2 - Exchange/Assertion, client gateway, requested_tenant=domain-5678
