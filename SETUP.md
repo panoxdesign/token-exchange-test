@@ -374,13 +374,14 @@ So sehen die Tokens bis token2 aus (gemessen, gekürzt — siehe die Bruno-Reque
 { "iss": "http://localhost:8181/realms/Backend-Microservices", "azp": "backend-requester",
   "sub": "80d521cb-…", "aud": "e-rechnung",
   "scope": "profile booking-restriction email e-rechnung",
-  "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } } }
+  "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } },
+  "tenant": "domain-5678" }
 ```
 
-`token2.tenant` bleibt stehen (Mapper 1/RTM setzt ihn weiterhin, reiner Audit-Claim) — `token3` trägt
-seit Mapper 2 **keinen** `tenant`-Claim mehr, weil Mapper 2 ihn nicht mehr aus der Assertion kopiert
-(anders als die frühere Fassung). Das Backend braucht ihn nicht: die Zuschneidung läuft allein über
-`resource_access`.
+`token2.tenant` bleibt stehen (Mapper 1/RTM setzt ihn weiterhin, reiner Audit-Claim) — Mapper 2
+kopiert ihn seit dieser Ergänzung als Audit-Claim nach `token3`, aber fail-closed-konsistent: nur
+wenn nach dem Verengen mindestens ein Dienst in `resource_access` übrig bleibt. Zur Autorisierung
+selbst trägt der Claim nichts bei — die Zuschneidung läuft allein über `resource_access`.
 
 `sub` in token2 ist der **Frontend-lab-user**, kein Service-Account. Der Claim `tenant`
 (RTM-Mapper) trägt den `domain`-Claim aus **token1 selbst** (dem subject_token des Exchange) —
@@ -403,7 +404,7 @@ wählbaren Request-Parameter.
 
 In `token3` ist `sub` der **Backend-`lab-user`** (verknüpft mit dem Frontend-lab-user, eigene UUID,
 bei jedem Neuaufbau anders). **Das Backend kennt dabei keinen Mandanten** — `token2.tenant` ist ein
-reiner Audit-Claim, den Mapper 2 nicht auswertet. Stattdessen verengt Mapper 2
+reiner Audit-Claim, den Mapper 2 nicht zur Autorisierung auswertet. Stattdessen verengt Mapper 2
 (`oidc-booking-restriction-mapper`, Domain B) `resource_access` auf die Dienste, die laut
 `scope`-Claim der Assertion gebucht sind (Präfix `service:`): Er liest `scope` aus der Assertion,
 bildet daraus die Menge gebuchter Dienste und entfernt jeden `resource_access`-Eintrag, dessen
@@ -411,7 +412,10 @@ Client nicht darin vorkommt (fail-closed ohne Treffer). Hier bucht token2 `servi
 der Request fordert `scope=e-rechnung` → die direkten Rollen des Backend-Users für `e-rechnung`
 (`reader`, `writer`) bleiben stehen; forderte derselbe Request stattdessen
 `scope=fahrtkostenerstattung`, obwohl nur `e-rechnung` gebucht ist, bliebe `resource_access` leer
-(siehe Gegenproben unten). Details, alle gemessenen Fälle und die Quellcode-Belege:
+(siehe Gegenproben unten). Bleibt nach dem Verengen mindestens ein Dienst übrig, kopiert Mapper 2
+zusätzlich `tenant` aus der Assertion nach `token3` (reiner Audit-Claim); bleibt `resource_access`
+leer, bleibt `token3` fail-closed-konsistent auch ohne `tenant`-Claim. Details, alle gemessenen
+Fälle und die Quellcode-Belege:
 [`docs/Mapper2-Spezifikation.md`](docs/Mapper2-Spezifikation.md) und
 [`docs/Mapper2-Recherche.md`](docs/Mapper2-Recherche.md). Werte oben gemessen (Keycloak 26.7.2,
 Stand dieses Setups).
@@ -465,9 +469,11 @@ wird von der Server-Implementierung gar nicht mehr gelesen; der Claim folgt auss
 `token1.domain`. Vor der Härtung wäre `token2.tenant` hier `domain-1234` gewesen.
 
 Seit der Umstellung auf Buchungs-Scopes (Mapper 2, s. u.) hat dieser Claim ohnehin **keine**
-Auswirkung mehr auf token3: Mapper 2 liest `tenant` gar nicht, `resource_access` hängt nur noch an
-den gebuchten `service:*`-Scopes. `token2.tenant` bleibt ein reiner Audit-Claim — die ursprüngliche
-Spoofing-Gefahr (fremder Mandant → fremde Rollen) existiert im Backend nicht mehr, weil das Backend
+Auswirkung mehr auf `resource_access` in token3: das hängt nur noch an den gebuchten
+`service:*`-Scopes. Mapper 2 liest `tenant` zwar (und kopiert ihn fail-closed-konsistent als
+Audit-Claim nach token3), wertet ihn aber nicht zur Autorisierung aus. `token2.tenant` bleibt ein
+reiner Audit-Claim — die ursprüngliche Spoofing-Gefahr (fremder Mandant → fremde Rollen) existiert
+im Backend nicht mehr, weil das Backend
 seit diesem Umbau gar keine Mandanten mehr kennt.
 
 ---
@@ -493,7 +499,7 @@ docker compose logs -f backend-keycloak
 | `invalid_grant: Invalid token audience` | die Assertion war nicht an diesen Realm adressiert |
 | `invalid_scope` | der Scope existiert nicht oder ist dem Requester nicht zugewiesen |
 | zu viele Rollen in token3 | **Full scope allowed** ist On, oder die Rollen stecken in den Default-Rollen des Realms |
-| `resource_access` in token3 leer | Mapper 2 hat fail-closed: der in Schritt 03 angeforderte `scope=` ist nicht als `service:<scope>` im `scope`-Claim der Assertion gebucht (erwartetes Verhalten, s. Gegenproben und Request `03c`) |
+| `resource_access` in token3 leer | Mapper 2 hat fail-closed: der in Schritt 03 angeforderte `scope=` ist nicht als `service:<scope>` im `scope`-Claim der Assertion gebucht (erwartetes Verhalten, s. Gegenproben und Request `03c`). Fail-closed-konsistent trägt token3 dann auch **keinen** `tenant`-Claim |
 | `requested_tenant=…` im Request 02 ändert nichts an `token2.tenant` | erwartetes Verhalten seit der Härtung — RTM liest `tenant` ausschließlich aus `token1.domain`, ein Request-Parameter wird nicht mehr ausgewertet |
 
 ---

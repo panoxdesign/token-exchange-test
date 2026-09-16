@@ -22,7 +22,9 @@ import java.util.Set;
  * Verengt resource_access im Access Token (token3, Domain B) auf die Dienste, die laut
  * scope-Claim der Token-Exchange-Assertion gebucht sind (Praefix "service:"). Fail-closed:
  * jeder Eintrag in resource_access, dessen Client nicht unter den gebuchten Diensten ist,
- * wird komplett entfernt.
+ * wird komplett entfernt. Schreibt zusaetzlich den tenant-Claim aus der Assertion als reinen
+ * Audit-Claim nach token3 - aber nur, wenn nach dem Verengen mindestens ein Dienst uebrig
+ * bleibt (sonst fail-closed auch beim tenant-Claim).
  *
  * Wirkt nur auf das Access Token - kein IDTokenMapper noetig.
  */
@@ -31,6 +33,7 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
 
     public static final String PROVIDER_ID = "oidc-booking-restriction-mapper";
     private static final String SCOPE_CLAIM = "scope";
+    private static final String TENANT_CLAIM = "tenant";
     private static final String SERVICE_PREFIX = "service:";
     private static final String ASSERTION_PARAM = "assertion";
 
@@ -79,18 +82,29 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
             return token;
         }
 
-        Set<String> gebuchteDienste = leseGebuchteDiensteAusAssertion(session);
+        AssertionDaten assertionDaten = leseAssertionDaten(session);
 
         // Kopie der Keys, um beim Entfernen keine ConcurrentModificationException auf der
         // Live-Map von token.getResourceAccess() zu riskieren.
         List<String> clientIds = new ArrayList<>(token.getResourceAccess().keySet());
         for (String clientId : clientIds) {
-            if (!gebuchteDienste.contains(clientId)) {
+            if (!assertionDaten.gebuchteDienste().contains(clientId)) {
                 token.getResourceAccess().remove(clientId);
             }
         }
 
+        // tenant nur als Audit-Claim setzen, wenn nach dem Verengen ueberhaupt ein Dienst
+        // uebrig bleibt - sonst waere token3 "ohne Rollen, aber mit tenant" ein Widerspruch
+        // zum Fail-closed-Verhalten.
+        if (assertionDaten.tenant() != null && !token.getResourceAccess().isEmpty()) {
+            token.getOtherClaims().put(TENANT_CLAIM, assertionDaten.tenant());
+        }
+
         return token;
+    }
+
+    // Haelt beide aus der Assertion gelesenen Werte, da sie aus derselben Dekodierung stammen.
+    private record AssertionDaten(Set<String> gebuchteDienste, String tenant) {
     }
 
     // Bruecke A: liest die Assertion direkt aus den Form-Parametern des Requests (dieselbe
@@ -101,33 +115,36 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
     // Dekodiert wird als JsonWebToken, nicht als AccessToken: "scope" ist dort kein
     // deklariertes Feld (das liegt nur in AccessToken), sondern landet ueber @JsonAnySetter
     // in otherClaims - genau wie "tenant"/"domain" bei den anderen beiden Mappern.
-    private Set<String> leseGebuchteDiensteAusAssertion(KeycloakSession session) {
+    private AssertionDaten leseAssertionDaten(KeycloakSession session) {
         if (session.getContext() == null || session.getContext().getHttpRequest() == null) {
-            return Collections.emptySet();
+            return new AssertionDaten(Collections.emptySet(), null);
         }
 
         var formParams = session.getContext().getHttpRequest().getDecodedFormParameters();
         if (formParams == null) {
-            return Collections.emptySet();
+            return new AssertionDaten(Collections.emptySet(), null);
         }
 
         String assertion = formParams.getFirst(ASSERTION_PARAM);
         if (assertion == null) {
-            return Collections.emptySet();
+            return new AssertionDaten(Collections.emptySet(), null);
         }
 
         String scope;
+        String tenant;
         try {
             JWSInput jws = new JWSInput(assertion);
             JsonWebToken jwt = jws.readJsonContent(JsonWebToken.class);
             Object s = jwt.getOtherClaims().get(SCOPE_CLAIM);
             scope = (s == null) ? null : s.toString();
+            Object t = jwt.getOtherClaims().get(TENANT_CLAIM);
+            tenant = (t == null) ? null : t.toString();
         } catch (JWSInputException e) {
-            return Collections.emptySet();
+            return new AssertionDaten(Collections.emptySet(), null);
         }
 
         if (scope == null || scope.isBlank()) {
-            return Collections.emptySet();
+            return new AssertionDaten(Collections.emptySet(), tenant);
         }
 
         Set<String> gebucht = new HashSet<>();
@@ -136,6 +153,6 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
                 gebucht.add(eintrag.substring(SERVICE_PREFIX.length()));
             }
         }
-        return gebucht;
+        return new AssertionDaten(gebucht, tenant);
     }
 }

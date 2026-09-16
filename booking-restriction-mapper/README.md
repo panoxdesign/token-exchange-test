@@ -6,6 +6,10 @@ aus der mitgeschickten Assertion, filtert darin die Einträge mit Präfix `servi
 Dienste) und verengt `resource_access` im ausgestellten Access Token auf genau diese Dienste. Ohne
 Treffer wird `resource_access` komplett geleert (fail-closed).
 
+Zusätzlich schreibt er den `tenant`-Claim aus der Assertion als reinen Audit-Claim nach token3 —
+aber fail-closed-konsistent nur, wenn nach dem Verengen mindestens ein Dienst in `resource_access`
+übrig geblieben ist. Bleibt `resource_access` leer, bleibt token3 auch ohne `tenant`-Claim.
+
 Anders als der frühere `tenant-restriction-mapper` kennt das Backend dabei **keine Mandanten**
 mehr: Es prüft nur noch, ob ein Dienst laut Assertion gebucht ist — welcher Mandant das ist und ob
 er den Dienst gebucht hat, entscheidet ausschließlich das Frontend/BFF (siehe

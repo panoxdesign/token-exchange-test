@@ -55,7 +55,7 @@ Dienste enthält.
 | Verengung | **Client-weiser Filter** (nicht Rollen-Schnittmenge) | Buchung ist boolesch je (Mandant, Dienst); innerhalb eines Dienstes gelten für alle Mandanten dieselben Rollen — es gibt keine Rollen-Quelle mehr zum Schneiden. |
 | Fehlerfall | **Fail-closed** | Kein `service:<dienst>` in der Assertion → Eintrag entfernt. Sicher, im Mapper ohne Sonderfall umsetzbar. |
 | Rollenquelle Backend | **Direkte Dienst-Rollen am User** | Ersetzt die Mandanten-Gruppen; Scope (Schritt 03) + Mapper 2 schneiden zu, nicht mehr die Gruppenmitgliedschaft. |
-| `tenant`-Claim | **bleibt, wird aber von Mapper 2 nicht mehr ausgewertet** | Reiner Audit-Claim; `token1.domain` bleibt CSV-Schlüssel fürs Frontend/BFF. `requested-tenant-mapper` (Mapper 1) bleibt unverändert. |
+| `tenant`-Claim | **bleibt, wird von Mapper 2 nicht ausgewertet, aber fail-closed-konsistent nach token3 kopiert** | Reiner Audit-Claim; `token1.domain` bleibt CSV-Schlüssel fürs Frontend/BFF. `requested-tenant-mapper` (Mapper 1) bleibt unverändert. Kopiert wird nur, wenn nach dem Verengen mindestens ein Dienst in `resource_access` übrig bleibt — sonst bliebe „ohne Rollen, aber mit tenant" ein Widerspruch zum Fail-closed-Verhalten. |
 
 ## 5. Mechanismus
 
@@ -71,6 +71,9 @@ Dienste enthält.
 - **Ein Codepfad:** `scope.split(whitespace)` → Einträge mit Präfix `service:` → Präfix strippen →
   Menge gebuchter Dienste. Jeder `resource_access`-Eintrag, dessen Client-ID nicht in dieser Menge
   liegt, wird entfernt. Ohne Buchung ist die Menge leer → fail-closed fällt ohne Sonderfall heraus.
+- **`tenant`-Audit-Claim:** aus derselben Dekodierung wird auch `otherClaims.get("tenant")` gelesen
+  und, falls vorhanden, erst *nach* dem Verengen nach token3 geschrieben — und nur, wenn
+  `resource_access` dann nicht leer ist. So bleibt der Fail-closed-Fall ohne `tenant`-Claim.
 
 ## 6. Datenmodell-Änderungen (`setup-realms.sh`)
 
@@ -105,6 +108,11 @@ Weil die Assertion aber nur `service:e-rechnung` bucht, leert Mapper 2 `resource
 nachträglich vollständig (siehe `Mapper2-Recherche.md`, Frage 1, für den Beleg, dass die native
 Scope-Auflösung das ohne den Mapper nicht getan hätte).
 
+Seit der Ergänzung des `tenant`-Audit-Claims gilt zusätzlich: token3 trägt `tenant` genau dann,
+wenn `resource_access` nach dem Verengen nicht leer ist — gemessen für Fall A (`tenant` gesetzt)
+und Fall C (`tenant` fehlt). Fälle B/D folgen demselben Codepfad, wurden für diese Ergänzung nicht
+gesondert neu gemessen.
+
 ### Gemessene Claims (kanonischer Fall A)
 
 ```jsonc
@@ -115,7 +123,7 @@ Scope-Auflösung das ohne den Mapper nicht getan hätte).
   "sub": "72401c31-…",                 // = lab-user im Frontend
   "aud": "http://localhost:8181/realms/Backend-Microservices",
   "scope": "profile email access-backend service:e-rechnung",
-  "tenant": "domain-5678",             // Mapper 1 (RTM) - reiner Audit-Claim, von Mapper 2 nicht gelesen
+  "tenant": "domain-5678",             // Mapper 1 (RTM) - Audit-Claim; Mapper 2 liest ihn nur durch, wertet ihn nicht aus
   "jti": "ntrtte:…"
 }
 
@@ -127,8 +135,8 @@ Scope-Auflösung das ohne den Mapper nicht getan hätte).
   "aud": "e-rechnung",
   "scope": "profile booking-restriction email e-rechnung",
   "preferred_username": "lab-user",
-  "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } }
-  // kein "tenant"-Claim mehr - Mapper 2 kopiert ihn nicht (anders als die Vorgaengerfassung)
+  "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } },
+  "tenant": "domain-5678"              // Audit-Claim, von Mapper 2 aus der Assertion kopiert
 }
 ```
 
@@ -144,6 +152,7 @@ Scope-Auflösung das ohne den Mapper nicht getan hätte).
   "aud": "fahrtkostenerstattung",       // Audience-Mapper feuert normal
   "resource_access": {},                // Mapper 2: nicht gebucht -> geleert
   "scope": "fahrtkostenerstattung profile booking-restriction email"
+  // kein "tenant"-Claim - resource_access ist nach dem Verengen leer, also fail-closed auch hier
 }
 ```
 
