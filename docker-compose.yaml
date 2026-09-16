@@ -61,7 +61,7 @@ services:
     ports:
       - "8181:8080"
     volumes:
-      - ./tenant-restriction-mapper/target/tenant-restriction-mapper.jar:/opt/keycloak/providers/tenant-restriction-mapper.jar
+      - ./booking-restriction-mapper/target/booking-restriction-mapper.jar:/opt/keycloak/providers/booking-restriction-mapper.jar
     environment:
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
       - KC_BOOTSTRAP_ADMIN_PASSWORD=admin

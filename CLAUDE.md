@@ -166,3 +166,20 @@ prüfen, ob `check-setup.sh`, `SETUP.md` (Diagramm, Objekt-Tabellen, Troubleshoo
 und die Bruno-Environment mitgezogen werden müssen.
 
 Token-Claims in `SETUP.md` sind **gemessene** Werte, keine erfundenen. Wer sie ändert, misst neu.
+
+## Unterpaket `requested-tenant-mapper`
+
+Custom Protocol Mapper für Keycloak. Wird hauptsächlich im Frontend-Keycloak verwendet. Der Mapper
+liest bei der Erstellung des Assertion-Tokens (token2) den `domain`-Claim aus dem `subject_token`
+und mapped diesen in den Assertion-Token als `tenant`-Claim. Siehe
+`requested-tenant-mapper/README.md`.
+
+## Unterpaket `booking-restriction-mapper`
+
+Custom Protocol Mapper für Keycloak. Wird hauptsächlich im Backend-Keycloak verwendet. Er liest
+beim JWT Authorization Grant (token3) den `scope`-Claim aus der mitgeschickten Assertion, filtert
+darin die Einträge mit Präfix `service:` (die gebuchten Dienste) und verengt `resource_access` im
+ausgestellten Access Token auf genau diese Dienste. Ohne Treffer wird `resource_access` komplett
+geleert (fail-closed). Das Backend kennt dabei keine Mandanten mehr — welcher Mandant welchen
+Dienst gebucht hat, steht nur im Frontend/BFF (`docs/buchungen.csv`, Zwischenlösung). Siehe
+`booking-restriction-mapper/README.md`.

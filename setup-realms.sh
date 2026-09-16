@@ -8,6 +8,9 @@
 #     <backend-issuer-url>       Client, der nur als Audience-Ziel existiert
 #     access-backend             Client Scope mit Audience-Mapper und RTM-Mapper
 #                                 (subject_token.domain -> Claim tenant)
+#     service:e-rechnung / ...   Client Scopes, reine Marker (keine Role Scope Mappings).
+#                                 Transportieren die Buchung eines Dienstes im scope-Claim
+#                                 von token2 - das Frontend/BFF waehlt sie anhand der CSV
 #     gateway                    Requester-Client des internen UND externen Exchange,
 #                                 darf Token Exchange
 #     self-service-portal        Client fuer den Password Grant des Lab-Users
@@ -20,12 +23,12 @@
 #     fahrtkostenerstattung      Ziel-Dienst mit Rollen reader, approver
 #     e-rechnung / fahrt...      Client Scopes: Audience-Mapper + Role Scope Mappings
 #     backend-requester          Requester-Client, loest die Assertion ein
-#     domain-5678 / domain-1234  Gruppen: tragen je Mandant die Rollen BEIDER Dienste
-#                                 (asymmetrischer Split), alleinige Rollenquelle
-#     tenant-restriction         Client Scope am Requester mit Mapper 2
-#                                 (oidc-tenant-restriction-mapper), Default-Scope
-#     lab-user                   Ziel-User, verknuepft mit dem Frontend-lab-user,
-#                                 Mitglied beider Gruppen, KEINE direkten Rollen
+#     booking-restriction        Client Scope am Requester mit Mapper 2
+#                                 (oidc-booking-restriction-mapper), Default-Scope
+#     lab-user                   Ziel-User, verknuepft mit dem Frontend-lab-user, traegt
+#                                 die Dienst-Rollen BEIDER Dienste DIREKT (keine Mandanten-
+#                                 Gruppen mehr - welcher Mandant was gebucht hat, weiss
+#                                 nur noch das Frontend/BFF, s. docs/buchungen.csv)
 #
 # Idempotent: mehrfaches Ausfuehren ist unschaedlich.
 #
@@ -76,25 +79,15 @@ FE_DOMAINS=(
 )
 
 # Ziel-Dienste:  name:rolle,rolle
+# Zugleich die Namen der Buchungs-Marker-Scopes im Frontend (service:<name>) und der
+# direkten Dienst-Rollen, die der Backend-Ziel-User traegt - fuer alle Mandanten gleich,
+# der asymmetrische Split entfaellt (Buchung ist boolesch je Mandant und Dienst, s.
+# docs/buchungen.csv).
 SERVICES=(
   "e-rechnung:reader,writer"
   "fahrtkostenerstattung:reader,approver"
 )
-
-# Mandanten-Gruppen im Backend:  gruppe:dienst:rolle,rolle
-# Jede Gruppe traegt die dienst-spezifischen Client-Rollen ihres Mandanten und ist
-# die alleinige Rollenquelle des Ziel-Users (keine direkten Rollen mehr, s. u.). Der
-# Ziel-User ist Mitglied beider Gruppen (TARGET_GROUPS) - erst darueber entsteht die
-# Vereinigung, die Mapper 2 (oidc-tenant-restriction-mapper) per tenant-Claim auf
-# genau eine Gruppe einschraenkt. Asymmetrischer Split je Mandant und Dienst, damit
-# die Trennung an beiden Diensten sichtbar wird.
-BE_GROUPS=(
-  "domain-5678:e-rechnung:writer,reader"
-  "domain-5678:fahrtkostenerstattung:reader,approver"
-  "domain-1234:e-rechnung:reader"
-  "domain-1234:fahrtkostenerstattung:reader"
-)
-TARGET_GROUPS="${TARGET_GROUPS:-domain-5678,domain-1234}"
+SERVICE_SCOPE_PREFIX="${SERVICE_SCOPE_PREFIX:-service:}"
 
 RECREATE=0
 [ "${1:-}" = "--recreate" ] && RECREATE=1
@@ -250,18 +243,19 @@ ensure_requested_tenant_mapper() { # base token realm scopeId
   ok "RTM-Mapper angelegt"
 }
 
-ensure_tenant_restriction_mapper() { # base token realm scopeId
-  # Mapper 2: verengt resource_access in token3 auf die Rollen der bestaetigten
-  # Mandanten-Gruppe. config bleibt leer, der Mapper braucht keine Einstellung.
+ensure_booking_restriction_mapper() { # base token realm scopeId
+  # Mapper 2: verengt resource_access in token3 auf die Dienste, die laut scope-Claim
+  # der Assertion (Praefix "service:") gebucht sind. config bleibt leer, der Mapper
+  # braucht keine Einstellung.
   req "$1" "$2" GET "/admin/realms/$3/client-scopes/$4/protocol-mappers/models"
-  if jq -e 'any(.protocolMapper == "oidc-tenant-restriction-mapper")' <"$BODY" >/dev/null; then
-    skip "Tenant-Restriction-Mapper vorhanden"; return
+  if jq -e 'any(.protocolMapper == "oidc-booking-restriction-mapper")' <"$BODY" >/dev/null; then
+    skip "Booking-Restriction-Mapper vorhanden"; return
   fi
   req "$1" "$2" POST "/admin/realms/$3/client-scopes/$4/protocol-mappers/models" \
-    "$(jq -nc '{name:"tenant-restriction", protocol:"openid-connect",
-      protocolMapper:"oidc-tenant-restriction-mapper", config:{}}')"
-  [ "$RC" = "201" ] || die "Tenant-Restriction-Mapper anlegen fehlgeschlagen (HTTP $RC): $(cat "$BODY")"
-  ok "Tenant-Restriction-Mapper angelegt"
+    "$(jq -nc '{name:"booking-restriction", protocol:"openid-connect",
+      protocolMapper:"oidc-booking-restriction-mapper", config:{}}')"
+  [ "$RC" = "201" ] || die "Booking-Restriction-Mapper anlegen fehlgeschlagen (HTTP $RC): $(cat "$BODY")"
+  ok "Booking-Restriction-Mapper angelegt"
 }
 
 ensure_client_role() { # base token realm clientUuid role
@@ -323,43 +317,6 @@ assign_client_roles_to_user() { # base token realm userId clientUuid label
   case "$RC" in
     204|409) ok "Rollen von '$6' zugewiesen" ;;
     *) die "Rollenzuweisung '$6' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
-  esac
-}
-
-ensure_group() { # base token realm groupName -> echo groupId
-  req "$1" "$2" GET "/admin/realms/$3/groups?search=$(jq -rn --arg s "$4" '$s|@uri')&exact=true"
-  # select statt Verlass auf exact=: aeltere/abweichende Server ignorieren den
-  # Parameter und liefern Substring-Treffer.
-  local id; id=$(jq -r --arg n "$4" 'map(select(.name==$n)) | .[0].id // empty' <"$BODY")
-  if [ -n "$id" ]; then skip "Gruppe '$4' existiert: $id" >&2; echo "$id"; return; fi
-  req "$1" "$2" POST "/admin/realms/$3/groups" "$(jq -nc --arg n "$4" '{name:$n}')"
-  [ "$RC" = "201" ] || die "Gruppe '$4' anlegen fehlgeschlagen (HTTP $RC): $(cat "$BODY")"
-  req "$1" "$2" GET "/admin/realms/$3/groups?search=$(jq -rn --arg s "$4" '$s|@uri')&exact=true"
-  id=$(jq -r --arg n "$4" 'map(select(.name==$n)) | .[0].id // empty' <"$BODY")
-  ok "Gruppe '$4' angelegt: $id" >&2
-  echo "$id"
-}
-
-assign_group_client_roles() { # base token realm groupId clientUuid rolesCsv label
-  local ROLE_JSON="[]" r
-  IFS=',' read -ra RL <<<"$6"
-  for r in "${RL[@]}"; do
-    req "$1" "$2" GET "/admin/realms/$3/clients/$5/roles/$r"
-    [ "$RC" = "200" ] || die "Rolle '$r' fuer Gruppe nicht gefunden (HTTP $RC)"
-    ROLE_JSON=$(jq -c --argjson arr "$ROLE_JSON" '$arr + [.]' <"$BODY")
-  done
-  req "$1" "$2" POST "/admin/realms/$3/groups/$4/role-mappings/clients/$5" "$ROLE_JSON"
-  case "$RC" in
-    204|409) ok "Gruppe '$7': Rollen zugewiesen ($6)" ;;
-    *) die "Gruppen-Rollen '$7' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
-  esac
-}
-
-add_user_to_group() { # base token realm userId groupId label
-  req "$1" "$2" PUT "/admin/realms/$3/users/$4/groups/$5"
-  case "$RC" in
-    204) ok "Mitglied der Gruppe '$6'" ;;
-    *) die "Gruppen-Mitgliedschaft '$6' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
   esac
 }
 
@@ -491,6 +448,19 @@ done
 # Exchange zum Backend (Schritt 02), nicht nur des internen zur Ziel-Domain.
 assign_optional_scope "$FE" "$FE_TOK" "$FE_REALM" "$GATEWAY_UUID" "$ACCESS_SCOPE_ID" "$ACCESS_SCOPE"
 
+step "Service-Scopes am Gateway (Buchungs-Markierung)"
+# Reine Marker-Scopes ohne Role Scope Mappings: sie tragen selbst keine Berechtigung,
+# sondern werden vom Frontend/BFF anhand der Buchung (docs/buchungen.csv) gezielt beim
+# externen Exchange (Schritt 02) angefordert und landen unveraendert im scope-Claim von
+# token2. Das Backend liest sie dort wieder aus (Booking-Restriction-Mapper) - der
+# einzige Zweck ist der Transport der Buchung, keine eigene Rolle.
+for entry in "${SERVICES[@]}"; do
+  SVC="${entry%%:*}"
+  SVC_MARK_SCOPE="$SERVICE_SCOPE_PREFIX$SVC"
+  SVC_MARK_SCOPE_ID=$(ensure_scope "$FE" "$FE_TOK" "$FE_REALM" "$SVC_MARK_SCOPE")
+  assign_optional_scope "$FE" "$FE_TOK" "$FE_REALM" "$GATEWAY_UUID" "$SVC_MARK_SCOPE_ID" "$SVC_MARK_SCOPE"
+done
+
 step "SP-Client '$SP_CLIENT'"
 SP_JSON=$(jq -nc --arg id "$SP_CLIENT" --arg sec "$SEC_SP" '{
   clientId:$id, enabled:true, protocol:"openid-connect",
@@ -617,12 +587,12 @@ for entry in $SCOPE_IDS; do
   assign_optional_scope "$BE" "$BE_TOK" "$BE_REALM" "$BE_DOMAIN_UUID" "$SID" "$SVC"
 done
 
-# Mapper 2 als Default-Scope am Backend-Requester: verengt token3 auf die Rollen
-# der bestaetigten Mandanten-Gruppe. Default (nicht optional), damit er bei JEDEM
-# jwt-bearer-Grant greift - auch fail-closed, wenn gar kein Dienst-Scope aktiv ist.
-TR_SCOPE_ID=$(ensure_scope "$BE" "$BE_TOK" "$BE_REALM" "tenant-restriction")
-ensure_tenant_restriction_mapper "$BE" "$BE_TOK" "$BE_REALM" "$TR_SCOPE_ID"
-assign_default_scope "$BE" "$BE_TOK" "$BE_REALM" "$BE_DOMAIN_UUID" "$TR_SCOPE_ID" "tenant-restriction"
+# Mapper 2 als Default-Scope am Backend-Requester: verengt token3 auf die im
+# scope-Claim der Assertion gebuchten Dienste. Default (nicht optional), damit er bei
+# JEDEM jwt-bearer-Grant greift - auch fail-closed, wenn gar kein Dienst-Scope aktiv ist.
+BR_SCOPE_ID=$(ensure_scope "$BE" "$BE_TOK" "$BE_REALM" "booking-restriction")
+ensure_booking_restriction_mapper "$BE" "$BE_TOK" "$BE_REALM" "$BR_SCOPE_ID"
+assign_default_scope "$BE" "$BE_TOK" "$BE_REALM" "$BE_DOMAIN_UUID" "$BR_SCOPE_ID" "booking-restriction"
 
 # --- Ziel-User ---------------------------------------------------------------
 step "Ziel-User '$TARGET_USER'"
@@ -663,49 +633,14 @@ else
   esac
 fi
 
-# Keine direkten Dienst-Rollen mehr am Ziel-User: seit Mapper 2 sind die
-# Mandanten-Gruppen die alleinige Rollenquelle. Direkte Rollen waeren
-# tenant-agnostisch und wuerden den Zuschnitt unterlaufen. Deshalb hier aktiv
-# entfernen - konvergent: ein zweiter Lauf findet nichts mehr zu loeschen.
+# Direkte Dienst-Rollen am Ziel-User: das Backend kennt keine Mandanten mehr, nur noch
+# "hat dieser User ueberhaupt Rollen fuer diesen Dienst". Welcher Mandant welchen Dienst
+# gebucht hat, weiss allein das Frontend/BFF (docs/buchungen.csv) und wird ueber die
+# service:*-Scopes im scope-Claim der Assertion transportiert; Mapper 2
+# (oidc-booking-restriction-mapper) erzwingt das beim Bau von token3.
 for entry in $SCOPE_IDS; do
   SVC="${entry%%:*}"; rest="${entry#*:}"; SVC_UUID="${rest#*:}"
-  req "$BE" "$BE_TOK" GET "/admin/realms/$BE_REALM/users/$BE_USER_ID/role-mappings/clients/$SVC_UUID"
-  CURRENT=$(cat "$BODY")
-  if [ "$(jq 'length' <<<"$CURRENT" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
-    req "$BE" "$BE_TOK" DELETE "/admin/realms/$BE_REALM/users/$BE_USER_ID/role-mappings/clients/$SVC_UUID" "$CURRENT"
-    case "$RC" in
-      204) ok "Direkte Rollen von '$SVC' am Ziel-User entfernt" ;;
-      *) die "Direkte Rollen '$SVC' entfernen fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
-    esac
-  else
-    skip "Ziel-User hat keine direkten Rollen auf '$SVC'"
-  fi
-done
-
-# --- Mandanten-Gruppen -------------------------------------------------------
-# Die Gruppen tragen die dienst-spezifischen Rollen eines Mandanten; der Ziel-User
-# ist Mitglied beider. Grundlage fuer Mapper 2 (Domain B), der spaeter anhand des
-# tenant-Claims genau eine Mitgliedschaft bestaetigt und nur deren Rollen ausgibt.
-step "Mandanten-Gruppen im Backend"
-GROUP_IDS=""
-for entry in "${BE_GROUPS[@]}"; do
-  GRP="${entry%%:*}"; rest="${entry#*:}"; GSVC="${rest%%:*}"; GROLES="${rest#*:}"
-  GID=$(ensure_group "$BE" "$BE_TOK" "$BE_REALM" "$GRP")
-  # Client-UUID des Dienstes aus SCOPE_IDS (Format 'svc:scopeId:svcUuid')
-  GSVC_UUID=""
-  for e in $SCOPE_IDS; do [ "${e%%:*}" = "$GSVC" ] && GSVC_UUID="${e##*:}"; done
-  [ -n "$GSVC_UUID" ] || die "Dienst '$GSVC' fuer Gruppe '$GRP' nicht gefunden"
-  assign_group_client_roles "$BE" "$BE_TOK" "$BE_REALM" "$GID" "$GSVC_UUID" "$GROLES" "$GRP/$GSVC"
-  GROUP_IDS="$GROUP_IDS $GRP:$GID"
-done
-
-# Ziel-User den Gruppen zuordnen (im Ist-Stand Mitglied beider)
-IFS=',' read -ra TG <<<"$TARGET_GROUPS"
-for g in "${TG[@]}"; do
-  GID=""
-  for e in $GROUP_IDS; do [ "${e%%:*}" = "$g" ] && GID="${e#*:}"; done
-  [ -n "$GID" ] || die "Gruppe '$g' fuer Mitgliedschaft nicht gefunden"
-  add_user_to_group "$BE" "$BE_TOK" "$BE_REALM" "$BE_USER_ID" "$GID" "$g"
+  assign_client_roles_to_user "$BE" "$BE_TOK" "$BE_REALM" "$BE_USER_ID" "$SVC_UUID" "$SVC"
 done
 
 # =============================================================================
@@ -727,11 +662,13 @@ cat <<EOF
     -d audience=$DOMAIN -d scope=$DOMAIN \\
     -d client_id=$GATEWAY -d client_secret=$SEC_GATEWAY | jq -r .access_token)
 
+  # scope traegt hier die Buchung: das Frontend/BFF liest sie aus der CSV
+  # (docs/buchungen.csv) und fordert nur die dort gebuchten service:*-Scopes an.
   token2=\$(curl -s -X POST "\$FE/realms/$FE_REALM/protocol/openid-connect/token" \\
     -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \\
     -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \\
     -d subject_token="\$token1" \\
-    -d scope=$ACCESS_SCOPE \\
+    -d scope="$ACCESS_SCOPE ${SERVICE_SCOPE_PREFIX}e-rechnung" \\
     -d audience=$BE_ISSUER \\
     -d client_id=$GATEWAY -d client_secret=$SEC_GATEWAY | jq -r .access_token)
 
@@ -741,8 +678,13 @@ cat <<EOF
     -d scope=e-rechnung \\
     -d client_id=$BE_REQUESTER -d client_secret=$SEC_BE_REQUESTER | jq -r .access_token)
 
-  Fuer den zweiten Dienst token2 neu holen (Assertions gelten genau einmal)
-  und scope=fahrtkostenerstattung setzen.
+  Fuer den zweiten Dienst token2 neu holen (Assertions gelten genau einmal), dabei
+  scope="$ACCESS_SCOPE ${SERVICE_SCOPE_PREFIX}fahrtkostenerstattung" setzen und in
+  token3 ebenfalls scope=fahrtkostenerstattung.
+
+  Fehlt der passende service:*-Scope in token2 (z.B. nur e-rechnung gebucht, aber
+  scope=fahrtkostenerstattung in token3 angefordert), leert der
+  Booking-Restriction-Mapper resource_access (fail-closed).
 
   Zweite Ziel-Domain statt domain-5678: im ersten Schritt audience=domain-1234
   -d scope=domain-1234 setzen - token1 gilt dann fuer domain-1234, token_sp

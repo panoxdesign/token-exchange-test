@@ -16,7 +16,7 @@ http:
       - name: subject_token
         value: "{{token1}}"
       - name: scope
-        value: "{{ACCESS_SCOPE}}"
+        value: "{{ACCESS_SCOPE}} {{SERVICE_SCOPE_ERECHNUNG}}"
       - name: audience
         value: "{{BACKEND_ISSUER}}"
       - name: client_id
@@ -40,11 +40,17 @@ settings:
 docs: |
   Schritt 2. Standard Token Exchange V2 im Frontend-Realm.
 
-  Zwei Parameter machen die Arbeit:
-    scope=access-backend   aktiviert den optionalen Client Scope und damit den
-                           Audience-Mapper. Ohne ihn bekommt das Ergebnis kein
-                           aud und Request 03 scheitert.
-    audience=<Backend>     grenzt die Audiences auf das Backend ein (Downscoping).
+  Drei Parameter machen die Arbeit:
+    scope=access-backend        aktiviert den optionalen Client Scope und damit
+                                 den Audience-Mapper. Ohne ihn bekommt das
+                                 Ergebnis kein aud und Request 03 scheitert.
+    scope=service:e-rechnung    Buchungs-Marker: das Frontend/BFF wuerde diesen
+                                 Scope anhand der CSV (docs/buchungen.csv)
+                                 waehlen. Landet unveraendert im scope-Claim von
+                                 token2 - der Booking-Restriction-Mapper im
+                                 Backend liest ihn dort wieder aus.
+    audience=<Backend>          grenzt die Audiences auf das Backend ein
+                                 (Downscoping).
 
   Erlaubt ist der Exchange, weil domain-5678 sein EIGENES Token tauscht. Bei
   einem fremden Token muesste der anfragende Client im aud des subject_token
@@ -52,8 +58,13 @@ docs: |
 
   Erwartung:
     aud    http://localhost:8181/realms/Backend-Microservices
-    scope  access-backend profile email
+    scope  access-backend service:e-rechnung profile email
     jti    gesetzt - jede Assertion gilt genau einmal
 
   Das Ergebnis ist KEIN Bearer-Token, sondern eine Assertion mit genau einem
   Zweck: Request 03. Fuer jeden Einloeseversuch wird eine neue gebraucht.
+
+  Fuer Request 03b (fahrtkostenerstattung) diesen Request vorher mit
+  scope="access-backend {{SERVICE_SCOPE_FAHRTKOSTEN}}" erneut ausfuehren - sonst
+  bucht token2 nur e-rechnung und 03b liefert (korrekt) ein leeres
+  resource_access, siehe Request 03c.

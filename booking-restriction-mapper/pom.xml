@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>com.example.keycloak</groupId>
-  <artifactId>tenant-restriction-mapper</artifactId>
+  <artifactId>booking-restriction-mapper</artifactId>
   <version>1.0.0</version>
   <packaging>jar</packaging>
 
@@ -47,6 +47,6 @@
   </dependencies>
 
   <build>
-    <finalName>tenant-restriction-mapper</finalName>
+    <finalName>booking-restriction-mapper</finalName>
   </build>
 </project>
