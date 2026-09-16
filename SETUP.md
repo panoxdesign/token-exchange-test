@@ -556,6 +556,57 @@ token1 — nicht anhand einer für den User global geltenden Rolle.
 
 ---
 
+## Testablauf: das Gate prüfen
+
+Ein kompletter Durchlauf, der zeigt, dass der externe Exchange mandantenabhängig auf `selfservice`
+gated ist — mit Positiv- **und** Negativfall. Baut auf den Detail-Blöcken oben auf (siehe „Die Kette
+durchlaufen" und „Ohne die Rolle `selfservice`…"), ohne sie zu wiederholen.
+
+**1. Mapper bauen** — einmalig bzw. nach Änderungen. Die drei JARs werden per Volume eingehängt und
+liegen **nicht** im Git (`target/` ist ignoriert); ohne sie startet der Stack nicht. Kein Java/Maven
+auf dem Host nötig, der Build läuft in Docker:
+
+```bash
+docker build --output type=local,dest=./requested-tenant-mapper/target    ./requested-tenant-mapper
+docker build --output type=local,dest=./booking-restriction-mapper/target ./booking-restriction-mapper
+docker build --output type=local,dest=./selfservice-exchange-gate/target   ./selfservice-exchange-gate
+```
+
+**2. Stack hoch, Realms aufsetzen, prüfen** — wie im Schnellstart:
+
+```bash
+docker compose up -d          # ~30 s bis erreichbar
+./setup-realms.sh --recreate
+./check-setup.sh              # muss grün sein (Exit 0)
+```
+
+`check-setup.sh` verifiziert dabei die Asymmetrie, an der das Gate hängt: `lab-user` trägt
+`selfservice` auf `domain-5678`, auf `domain-1234` **nur** `admin`.
+
+**3. Positivfall — aktiv in `domain-5678`.** Die volle Kette `04 → 05a → 02 → 03a` (Befehle im
+Abschnitt „Die Kette durchlaufen"). Erwartung: `token1` trägt `selfservice`, `token2` bekommt
+`aud: …/Backend-Microservices`, `token3` kommt mit `resource_access.e-rechnung`.
+
+**4. Negativfall — aktiv in `domain-1234`.** Dieselbe Kette, aber mit Bruno-Request `05b` statt
+`05a` (in der Shell: `audience=domain-1234 -d scope=domain-1234` im ersten Exchange). Der **interne**
+Exchange (`05b`) gelingt weiterhin — `admin` reicht dafür —, aber der **externe** Schritt `02`
+scheitert:
+
+```
+invalid_request: Requested audience not available: http://localhost:8181/realms/Backend-Microservices
+```
+
+Kein `token2`, damit auch kein `token3`. Der Gate greift also genau am externen Schritt und
+unterscheidet die Domains ausschließlich am Inhalt von `token1` (Details im Abschnitt „Ohne die
+Rolle `selfservice` im aktiven Mandanten").
+
+**5. Gegenprobe (optional, beweist die Ursache).** Gib `lab-user` `selfservice` auch auf
+`domain-1234` (Admin-UI → Realm `frontend` → Users → `lab-user` → Role mapping → Client role
+`domain-1234 selfservice`) und wiederhole Schritt 4 — jetzt gelingt auch der externe Exchange aus
+`domain-1234`. Zum Zurücksetzen: `./setup-realms.sh --recreate`.
+
+---
+
 ## Troubleshooting
 
 Die aussagekräftige Meldung steht im Server-Log, nicht in der HTTP-Antwort:
