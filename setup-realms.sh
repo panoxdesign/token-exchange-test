@@ -5,9 +5,12 @@
 #   Frontend-Realm  frontend
 #     domain-5678                Ziel-Domain des internen Exchange, Rollen admin, selfservice
 #     domain-1234                zweite Ziel-Domain, Rollen admin, selfservice
-#     <backend-issuer-url>       Client, der nur als Audience-Ziel existiert
-#     access-backend             Client Scope mit Audience-Mapper und RTM-Mapper
-#                                 (subject_token.domain -> Claim tenant)
+#     <backend-issuer-url>       Client, der nur als Audience-Ziel existiert, traegt die Rolle
+#                                 selfservice - gated den externen Exchange
+#     access-backend             Client Scope mit RTM-Mapper (subject_token.domain -> Claim
+#                                 tenant); aud entsteht ueber Role Scope Mapping auf die
+#                                 selfservice-Rolle des Audience-Ziel-Clients, kein eigener
+#                                 Audience-Mapper mehr
 #     service:e-rechnung / ...   Client Scopes, reine Marker (keine Role Scope Mappings).
 #                                 Transportieren die Buchung eines Dienstes im scope-Claim
 #                                 von token2 - das Frontend/BFF waehlt sie anhand der CSV
@@ -16,6 +19,7 @@
 #     self-service-portal        Client fuer den Password Grant des Lab-Users
 #     to-gateway                 Client Scope mit Audience-Mapper auf gateway
 #     lab-user                   User, traegt die Rollen aus domain-5678 und domain-1234
+#                                 sowie selfservice am Audience-Ziel-Client (externer Exchange)
 #
 #   Backend-Realm   Backend-Microservices
 #     frontend                   Identity Provider, akzeptiert JWT Authorization Grants
@@ -371,18 +375,27 @@ ensure_password() { # base token realm userId password
 step "Frontend-Realm '$FE_REALM'"
 ensure_realm "$FE" "$FE_TOK" "$FE_REALM"
 
-# Client, dessen Client-ID die Issuer-URL des Backends IST. Der Audience-Mapper
-# kann nur die ID eines existierenden Clients in aud schreiben, und aud muss laut
-# RFC 7523 der Issuer des empfangenden Servers sein. Daher dieser Name.
+# Client, dessen Client-ID die Issuer-URL des Backends IST: die aud landet im
+# Token als Client-ID eines existierenden Clients (ob per Audience-Mapper oder,
+# wie hier, per AudienceResolveProtocolMapper), und aud muss laut RFC 7523 der
+# Issuer des empfangenden Servers sein. Daher dieser Name.
 AUD_JSON=$(jq -nc --arg id "$BE_ISSUER" --arg sec "$SEC_AUDIENCE" '{
   clientId:$id, name:"backend", enabled:true, protocol:"openid-connect",
   publicClient:false, secret:$sec,
   standardFlowEnabled:false, directAccessGrantsEnabled:false,
   serviceAccountsEnabled:false, implicitFlowEnabled:false}')
-ensure_client "$FE" "$FE_TOK" "$FE_REALM" "$BE_ISSUER" "$AUD_JSON" >/dev/null
+AUD_UUID=$(ensure_client "$FE" "$FE_TOK" "$FE_REALM" "$BE_ISSUER" "$AUD_JSON")
+
+# Rolle 'selfservice' gated den externen Exchange - derselbe Mechanismus, den
+# domain-5678/domain-1234 unten schon fuer token1 nutzen: der eingebaute
+# AudienceResolveProtocolMapper (im Client Scope 'roles', s. gateway) traegt
+# jeden Client in die aud, an dem der User eine GESCOPTE Rolle hat. Vorher
+# erzwang ein fest verdrahteter oidc-audience-mapper auf 'access-backend' die
+# aud bedingungslos, also konnte jeder User den externen Exchange durchfuehren.
+ensure_client_role "$FE" "$FE_TOK" "$FE_REALM" "$AUD_UUID" "selfservice"
 
 ACCESS_SCOPE_ID=$(ensure_scope "$FE" "$FE_TOK" "$FE_REALM" "$ACCESS_SCOPE")
-ensure_audience_mapper "$FE" "$FE_TOK" "$FE_REALM" "$ACCESS_SCOPE_ID" "$BE_ISSUER"
+set_role_scope_mappings "$FE" "$FE_TOK" "$FE_REALM" "$ACCESS_SCOPE_ID" "$AUD_UUID" "selfservice"
 ensure_requested_tenant_mapper "$FE" "$FE_TOK" "$FE_REALM" "$ACCESS_SCOPE_ID"
 
 # --- Interner Token Exchange: Gateway-Kette -----------------------------------
@@ -492,6 +505,10 @@ for entry in $FE_DOMAIN_UUIDS; do
   DOM="${entry%%:*}"; rest="${entry#*:}"; DOM_UUID="${rest#*:}"
   assign_client_roles_to_user "$FE" "$FE_TOK" "$FE_REALM" "$LAB_USER_ID" "$DOM_UUID" "$DOM"
 done
+
+# selfservice am Audience-Ziel-Client: ohne sie resolvt der externe Exchange
+# keine Backend-aud fuer diesen User, s. Kommentar am Rollen-Anlegen oben.
+assign_client_roles_to_user "$FE" "$FE_TOK" "$FE_REALM" "$LAB_USER_ID" "$AUD_UUID" "selfservice"
 
 # =============================================================================
 # Backend-Realm

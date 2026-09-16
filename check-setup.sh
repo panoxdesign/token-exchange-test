@@ -110,19 +110,28 @@ ba() { curl -sf -H "Authorization: Bearer $BE_TOK" "$BE/admin/realms/$BE_REALM$1
 # --- 1 Frontend --------------------------------------------------------------
 head_ "1. Frontend-Realm '$FE_REALM'"
 
-if [ "$(fa "/clients?clientId=$(uri "$BE_ISSUER")" | jq 'length')" -gt 0 ] 2>/dev/null; then
-  ok "Audience-Client '$BE_ISSUER' vorhanden"
-else
+AUDC=$(fa "/clients?clientId=$(uri "$BE_ISSUER")" | jq '.[0] // empty')
+if [ -z "$AUDC" ]; then
   bad "Audience-Client '$BE_ISSUER' fehlt" "Client-ID ist die Issuer-URL des Backends"
+else
+  ok "Audience-Client '$BE_ISSUER' vorhanden"
+  AUDU=$(jq -r '.id' <<<"$AUDC")
+  fa "/clients/$AUDU/roles" | jq -e 'any(.name=="selfservice")' >/dev/null \
+    && ok "Rolle 'selfservice' vorhanden" \
+    || bad "Rolle 'selfservice' fehlt" \
+           "gated den externen Exchange - ohne sie kann kein User ueber Rollen in die Backend-aud aufgeloest werden"
 fi
 
 SC=$(fa "/client-scopes" | jq --arg n "$ACCESS_SCOPE" '.[] | select(.name==$n)')
 if [ -n "$SC" ]; then
   ok "Client Scope '$ACCESS_SCOPE' vorhanden"
-  M=$(jq -r '.protocolMappers // [] | .[] | select(.protocolMapper=="oidc-audience-mapper")
-      | .config["included.client.audience"] // empty' <<<"$SC")
-  [ "$M" = "$BE_ISSUER" ] && ok "Audience-Mapper zeigt auf '$BE_ISSUER'" \
-    || bad "Audience-Mapper zeigt auf '${M:-<keiner>}'" "erwartet '$BE_ISSUER'"
+  if [ -n "${AUDU:-}" ]; then
+    fa "/client-scopes/$(jq -r '.id' <<<"$SC")/scope-mappings/clients/$AUDU" \
+      | jq -e 'any(.name=="selfservice")' >/dev/null \
+      && ok "Role Scope Mapping 'selfservice' auf '$ACCESS_SCOPE' gesetzt" \
+      || bad "Role Scope Mapping 'selfservice' auf '$ACCESS_SCOPE' fehlt" \
+             "ohne es traegt der AudienceResolveProtocolMapper keine Backend-aud in token2 - Requested audience not available"
+  fi
   jq -e '.protocolMappers // [] | any(.protocolMapper=="oidc-requested-tenant-mapper")' <<<"$SC" >/dev/null \
     && ok "RTM-Mapper (oidc-requested-tenant-mapper) vorhanden" \
     || bad "RTM-Mapper fehlt" "ohne ihn bekommt token2 keinen tenant-Claim"
@@ -307,6 +316,11 @@ else
     [ -n "$RR" ] && ok "Rollen auf '$DM': $RR" \
       || bad "keine Rollen auf '$DM'" "dann ist resource_access im Token leer"
   done
+  jq -e --arg c "$BE_ISSUER" '.clientMappings[$c].mappings // [] | any(.name=="selfservice")' \
+    <<<"${RM:-{\}}" >/dev/null \
+    && ok "Rolle 'selfservice' auf '$BE_ISSUER': vorhanden" \
+    || bad "keine Rolle 'selfservice' auf '$BE_ISSUER'" \
+           "ohne sie resolvt der externe Exchange keine Backend-aud fuer diesen User"
 fi
 
 default_role_check fa "1b. Default-Rollen des Frontend-Realms" \
