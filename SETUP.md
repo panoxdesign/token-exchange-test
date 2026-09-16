@@ -499,11 +499,11 @@ seit diesem Umbau gar keine Mandanten mehr kennt.
 Der Gate-Punkt für „darf dieser User gerade zum Backend wechseln" ist die Rolle `selfservice`
 **im aktiven Mandanten** — nicht irgendeine statische Zuweisung. `lab-user` trägt `selfservice`
 nur auf `domain-5678`, auf `domain-1234` nur `admin` (`LAB_USER_DOMAIN_ROLES` in
-`setup-realms.sh`). Der interne Exchange (05a) braucht `selfservice` gar nicht — er gelingt aus
+`setup-realms.sh`). Der interne Exchange (05a/05b) braucht `selfservice` gar nicht — er gelingt aus
 **beiden** Domains, `admin` reicht:
 
 ```bash
-# 05a fuer domain-1234 statt domain-5678 - Rollen dort: nur admin
+# 05b fuer domain-1234 statt domain-5678 - Rollen dort: nur admin
 token1_1234=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
   -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
