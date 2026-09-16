@@ -1,0 +1,8 @@
+# Zwischenloesung: Beispiel-Buchungsdaten fuer dieses Lernlabor. Kein Code liest diese
+# Datei - sie steht nur fuer das Frontend/BFF, das hier manuell simuliert wird. In der
+# Kette entscheidet sie, welche service:*-Scopes beim externen Exchange (Schritt 02)
+# angefordert werden, siehe SETUP.md.
+Mandant,Service
+domain-5678,e-rechnung
+domain-5678,fahrtkostenerstattung
+domain-1234,e-rechnung

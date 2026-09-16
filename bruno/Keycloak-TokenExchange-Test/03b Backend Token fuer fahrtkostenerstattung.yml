@@ -10,6 +10,11 @@ docs: |
   Dieser Request ist identisch mit dem Gegenstueck fuer den anderen Dienst -
   bis auf den scope. Genau darin liegt die Zuschneidung.
 
+  Vorher Request 02 mit scope="access-backend {{SERVICE_SCOPE_FAHRTKOSTEN}}"
+  ausfuehren - sonst bucht token2 nur e-rechnung (Default in Request 02) und
+  der Booking-Restriction-Mapper leert resource_access (siehe Request 03c fuer
+  genau diese Gegenprobe, absichtlich ausgeloest).
+
   Was das Backend prueft:
     1. iss der Assertion  -> findet den Identity Provider "frontend"
     2. Signatur           -> ueber dessen JWKS URL

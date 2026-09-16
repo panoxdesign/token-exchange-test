@@ -8,4 +8,4 @@ COPY src/ src/
 RUN mvn -B clean package
 
 FROM scratch AS export
-COPY --from=build /app/target/tenant-restriction-mapper.jar /
+COPY --from=build /app/target/booking-restriction-mapper.jar /

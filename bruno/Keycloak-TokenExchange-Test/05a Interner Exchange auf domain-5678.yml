@@ -1,7 +1,7 @@
 info:
   name: 05a Interner Exchange auf domain-5678
   type: http
-  seq: 6
+  seq: 7
 
 http:
   method: POST

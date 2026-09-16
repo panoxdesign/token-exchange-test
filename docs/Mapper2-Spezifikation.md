@@ -1,159 +1,169 @@
-# Mapper 2 — Mandanten-Zuschnitt von token3 (Spezifikation & Nachweis)
+# Mapper 2 — Buchungs-Zuschnitt von token3 (Spezifikation & Nachweis)
 
 Fachliche Spezifikation und **gemessener** Nachweis des zweiten Custom Protocol Mappers
-(`oidc-tenant-restriction-mapper`, Domain B / Backend-Keycloak). Ergänzt die
+(`oidc-booking-restriction-mapper`, Domain B / Backend-Keycloak). Ergänzt die
 Machbarkeitsanalyse in [`Mapper2-Recherche.md`](Mapper2-Recherche.md) (Quellcode-Belege) und den
-Modul-`README` in [`../tenant-restriction-mapper/`](../tenant-restriction-mapper/README.md).
+Modul-`README` in [`../booking-restriction-mapper/`](../booking-restriction-mapper/README.md).
 
 ## 1. Ziel & Motivation
 
-Ein Backend-User kann mehreren Mandanten-Gruppen angehören (`/domain-5678`, `/domain-1234`), die
-je Dienst unterschiedliche Client-Rollen tragen. Ohne weitere Information bekam token3 die
-**Vereinigung** aller Rollen über alle Gruppen — nicht die Rollen des einen Mandanten, für den der
-Request gedacht ist. Mapper 2 schneidet token3 auf **genau den angeforderten Mandanten** zu und
-setzt einen **bestätigten** `tenant`-Claim.
+Vorher trug der Backend-Realm das Mandanten-Wissen selbst (Gruppen `/domain-5678`, `/domain-1234`).
+Jeder neue Mandant im Frontend musste im Backend nachgezogen werden (Gruppe, Gruppenrollen,
+Mitgliedschaft) — eine Synchronisation, die entfallen soll. Künftig kennt das Backend **keine
+Mandanten** mehr. Die Buchung „welcher Mandant hat welchen Dienst gebucht" liegt in einer CSV
+([`buchungen.csv`](buchungen.csv)), die **nur das Frontend/BFF** liest (in diesem Lab manuell
+simuliert). Die Buchung reist als signierte `service:*`-Scopes im `scope`-Claim der Assertion
+(token2); Mapper 2 erzwingt im Backend, dass `resource_access` in token3 nur die dort gebuchten
+Dienste enthält.
 
 ## 2. Akteure
 
-- **`gateway`** (Frontend) — löst den externen Exchange aus und wählt den Mandanten per
-  `requested_tenant=`. Mapper 1 (RTM) schreibt ihn als `tenant`-Claim in token2.
-  > **Hinweis (Stand nach der RTM-Härtung):** `requested_tenant=` war der Eingabemechanismus zum
-  > Zeitpunkt dieser Spezifikation. Seit der Härtung von Mapper 1 (RTM) leitet dieser den
-  > `tenant`-Claim stattdessen aus `token1.domain` (dem subject_token des Exchange) ab — ein
-  > Request-Parameter existiert nicht mehr. Das hier beschriebene Verhalten von Mapper 2 selbst
-  > (Zuschnitt anhand des `tenant`-Claims) ist davon unberührt. Details: `SETUP.md`,
-  > `requested-tenant-mapper/README.md`.
-- **`backend-requester`** (Backend-Requester) — löst die Assertion per jwt-bearer ein; für seinen Bau von
+- **Frontend/BFF** (simuliert) — liest die CSV und fordert beim externen Exchange (Schritt 02) nur
+  die dort gebuchten `service:*`-Scopes an. In diesem Lab manuell über den `scope=`-Parameter des
+  Requests, kein Anwendungscode.
+- **`gateway`** (Frontend) — löst den externen Exchange aus; die angeforderten `service:*`-Scopes
+  landen unverändert im `scope`-Claim von token2 (kein eigener Mapper nötig, die Standard-Scope-
+  Auflösung reicht).
+- **`backend-requester`** (Backend) — löst die Assertion per jwt-bearer ein; für seinen Bau von
   token3 greift Mapper 2.
-- **Ziel-User `lab-user`** (Backend) — Mitglied beider Mandanten-Gruppen; die Gruppen sind seit
-  Mapper 2 seine **alleinige** Rollenquelle.
+- **Ziel-User `lab-user`** (Backend) — trägt die Dienst-Rollen **beider** Dienste direkt (keine
+  Mandanten-Gruppen mehr). Welcher Dienst tatsächlich freigeschaltet wird, entscheidet allein die
+  Buchung in der Assertion.
 
 ## 3. Fachliche Kernregel
 
-> token3 bekommt die Rollen für (Tenant, Service) **genau dann**, wenn die Mandanten-Gruppe
-> `tenant` im Backend die Rollen des Dienstes `service` gewährt. Andernfalls **fail-closed**:
-> leeres `resource_access`, kein `tenant`-Claim.
+> token3 bekommt die Rollen für den Dienst `service` **genau dann**, wenn die Assertion (token2)
+> `service:<service>` im `scope`-Claim trägt UND der Backend-User Rollen für `service` hat UND
+> `scope=<service>` beim jwt-bearer-Request (Schritt 03) angefordert wurde. Fehlt die Buchung,
+> **fail-closed**: der Client-Eintrag verschwindet komplett aus `resource_access`.
 
-- **Tenant**: kommt aus dem `tenant`-Claim der Assertion (token2), gesetzt von Mapper 1.
-- **Service**: kommt aus `scope=` im jwt-bearer-Request (Schritt 03). Er muss ohnehin mit, sonst
-  löst Keycloak die Dienst-Rollen nicht auf. **Kein** zusätzlicher Service-Claim in token2 nötig.
+- **Buchung**: kommt aus den `service:*`-Einträgen im `scope`-Claim der Assertion (token2), vom
+  Frontend/BFF anhand der CSV gewählt.
+- **Dienst-Auswahl**: kommt aus `scope=` im jwt-bearer-Request (Schritt 03), wie schon vorher — er
+  muss ohnehin mit, sonst löst Keycloak die Dienst-Rollen nicht auf (Role Scope Mappings).
+- Beide Bedingungen sind unabhängig und müssen beide erfüllt sein: `scope=fahrtkostenerstattung`
+  ohne `service:fahrtkostenerstattung` in der Assertion bleibt leer, und umgekehrt bucht ein
+  `service:fahrtkostenerstattung` in der Assertion ohne `scope=fahrtkostenerstattung` im Request
+  gar nichts (Keycloak löst dann von vornherein keine Rollen für den Client auf).
 
 ## 4. Design-Entscheidungen (mit Begründung)
 
 | Entscheidung | Gewählt | Warum |
 |---|---|---|
-| Custom Mapper vs. nativ | **Custom Mapper** | Keycloak flacht die Rollen-Herkunft ein; „nur Rollen aus Gruppe X" gibt es nativ nicht. |
-| Service-Quelle | **`scope=` in Schritt 03** | Muss ohnehin mit; kein Frontend-Umbau, Mapper 1 bleibt unangetastet. |
-| Verengung | **Filtern (Schnittmenge)** | Entfernt nur, fügt nie hinzu → respektiert Scope-Gating, subsumiert direkte Rollen und Mehrfach-Mitgliedschaft. |
-| Fehlerfall | **Fail-closed** | Kein Tenant/keine Mitgliedschaft → leeres `resource_access`, kein `tenant`. Sicher, im Mapper sauber umsetzbar. |
-| Rollenquelle | **Nur Gruppen** | Direkte User-Rollen wären tenant-agnostisch und würden den Zuschnitt unterlaufen — deshalb entfernt. |
-| Gruppen-Rollen | **Asymmetrischer Split** | Trennung an beiden Diensten sichtbar (siehe Datenmodell). |
+| Custom Mapper vs. nativ | **Custom Mapper** | Keycloak bildet beim jwt-bearer-Grant keine Schnittmenge aus Assertion-`scope` und Request-`scope` (belegt in `Mapper2-Recherche.md`) — ohne Mapper wäre die Buchung wirkungslos. |
+| Transport der Buchung | **echte `service:*`-Scopes im `scope`-Claim von token2** | Signiert, vom Frontend gewählt, ohne Frontend-Umbau über die Scope-Auflösung. |
+| Verengung | **Client-weiser Filter** (nicht Rollen-Schnittmenge) | Buchung ist boolesch je (Mandant, Dienst); innerhalb eines Dienstes gelten für alle Mandanten dieselben Rollen — es gibt keine Rollen-Quelle mehr zum Schneiden. |
+| Fehlerfall | **Fail-closed** | Kein `service:<dienst>` in der Assertion → Eintrag entfernt. Sicher, im Mapper ohne Sonderfall umsetzbar. |
+| Rollenquelle Backend | **Direkte Dienst-Rollen am User** | Ersetzt die Mandanten-Gruppen; Scope (Schritt 03) + Mapper 2 schneiden zu, nicht mehr die Gruppenmitgliedschaft. |
+| `tenant`-Claim | **bleibt, wird aber von Mapper 2 nicht mehr ausgewertet** | Reiner Audit-Claim; `token1.domain` bleibt CSV-Schlüssel fürs Frontend/BFF. `requested-tenant-mapper` (Mapper 1) bleibt unverändert. |
 
 ## 5. Mechanismus
 
-- **Brücke A (empirisch bestätigt):** Mapper 2 liest die `assertion` direkt aus den
-  Form-Parametern des Requests (`getDecodedFormParameters().getFirst("assertion")`) und dekodiert
-  den `tenant`-Claim selbst (`JWSInput`/`JsonWebToken`) — dieselbe Quelle, die der jwt-bearer-Grant
-  nutzt. Keine erneute Signaturprüfung nötig (der Grant validiert vor dem Token-Bau). Kein
-  IdP-Mapper, keine Session Note.
+- **Brücke A:** Mapper 2 liest die `assertion` direkt aus den Form-Parametern des Requests
+  (`getDecodedFormParameters().getFirst("assertion")`) und dekodiert sie als `JsonWebToken` — wie
+  der jwt-bearer-Grant selbst. `scope` ist dort kein deklariertes Feld (nur in der Unterklasse
+  `AccessToken`), landet aber über `@JsonAnySetter` in `otherClaims` — genau wie `tenant`/`domain`
+  bei den anderen beiden Mappern. Keine erneute Signaturprüfung nötig (der Grant validiert vor dem
+  Token-Bau). Beleg: [`Mapper2-Recherche.md`](Mapper2-Recherche.md).
 - **Priorität 100:** Mapper 2 läuft nach den Rollen-Mappern (Priorität 40), damit `resource_access`
   beim Verengen bereits befüllt ist. `transformAccessToken` wird überschrieben (sonst greift die
-  Config-Flag-Falle wie bei Mapper 1). Belege: [`Mapper2-Recherche.md`](Mapper2-Recherche.md).
-- **Ein Codepfad:** `resource_access[client].roles ∩ Rollen(bestätigte Gruppe, client)`; leere
-  Einträge werden entfernt. Ohne bestätigte Gruppe ist die erlaubte Menge überall leer → fail-closed
-  fällt ohne Sonderfall heraus.
+  Config-Flag-Falle wie bei den anderen Mappern).
+- **Ein Codepfad:** `scope.split(whitespace)` → Einträge mit Präfix `service:` → Präfix strippen →
+  Menge gebuchter Dienste. Jeder `resource_access`-Eintrag, dessen Client-ID nicht in dieser Menge
+  liegt, wird entfernt. Ohne Buchung ist die Menge leer → fail-closed fällt ohne Sonderfall heraus.
 
 ## 6. Datenmodell-Änderungen (`setup-realms.sh`)
 
-- **Mandanten-Gruppen (asymmetrischer Split):**
-
-  | Gruppe | `e-rechnung` | `fahrtkostenerstattung` |
-  |---|---|---|
-  | `/domain-5678` | reader, writer | reader, approver |
-  | `/domain-1234` | reader | reader |
-
-- **Ziel-User `lab-user`:** **keine** direkten Client-Rollen mehr (aktiv entfernt); Rollen kommen
-  ausschließlich über die Gruppen. Mitglied beider Gruppen.
-- **Neuer Client Scope `tenant-restriction`** mit Mapper 2, als **Default-Scope** am
+- **Frontend:** Client Scopes `service:e-rechnung`, `service:fahrtkostenerstattung` — reine Marker
+  ohne Role Scope Mappings, als **Optional** am `gateway`.
+- **Backend:** Mandanten-Gruppen `/domain-5678`, `/domain-1234` entfallen ersatzlos. Der
+  Backend-Ziel-User `lab-user` trägt stattdessen **direkte** Client-Rollen beider Dienste
+  (`e-rechnung`: reader, writer / `fahrtkostenerstattung`: reader, approver) — für alle Mandanten
+  gleich, der frühere asymmetrische Split entfällt.
+- **Neuer Client Scope `booking-restriction`** mit Mapper 2, als **Default-Scope** am
   Backend-Requester `backend-requester` — greift damit bei jedem token3.
 - **`docker-compose.yaml`:** JAR unter `backend-keycloak` gemountet
-  (`/opt/keycloak/providers/tenant-restriction-mapper.jar`).
+  (`/opt/keycloak/providers/booking-restriction-mapper.jar`).
 
 ## 7. Akzeptanzkriterien — gemessen
 
-Gemessen gegen Keycloak 26.7.2 im isolierten kctest-Stack, `./setup-realms.sh --recreate`,
-kompletter Flow (04 → 05 → 02 mit `requested_tenant` → 03 jwt-bearer). Alle sechs Fälle bestanden:
+Gemessen gegen Keycloak 26.7.2 im isolierten kctest-Stack (`-p kctest`, benannte Volumes),
+`./setup-realms.sh --recreate`, kompletter Flow (04 → 05a → 02 mit `service:*`-Scope → 03
+jwt-bearer). Alle vier Fälle bestanden:
 
-> **Hinweis:** Die Spalte `requested_tenant` bildet den Eingabemechanismus zum Zeitpunkt dieser
-> Messung ab (unveränderte Rohwerte, kein Nacherfinden). Seit der RTM-Härtung kommt der
-> `tenant`-Claim, den Mapper 2 hier verarbeitet, aus `token1.domain` statt aus diesem Parameter —
-> die Werte in der Spalte entsprachen damals 1:1 dem resultierenden `tenant`-Claim, weil RTM den
-> Parameter seinerzeit ungeprüft übernahm. Mapper 2 selbst kennt `requested_tenant` nie, nur den
-> `tenant`-Claim der Assertion — insofern ist diese Tabelle weiterhin ein gültiger Nachweis für
-> Mapper 2.
+| Fall | `scope` in Schritt 02 (token2) | `scope` in Schritt 03 (token3) | token3.`resource_access` |
+|---|---|---|---|
+| A — Positiv | `access-backend service:e-rechnung` | `e-rechnung` | `{ "e-rechnung": { "roles": ["reader", "writer"] } }` |
+| B — Positiv, zweiter Dienst | `access-backend service:fahrtkostenerstattung` | `fahrtkostenerstattung` | `{ "fahrtkostenerstattung": { "roles": ["approver", "reader"] } }` |
+| C — Fail-closed, ungebucht | `access-backend service:e-rechnung` | `fahrtkostenerstattung` | `{}` (leer) |
+| D — Fail-closed, keine Buchung | `access-backend` (kein `service:*`) | `e-rechnung` | `{}` (leer) |
 
-| Fall | `requested_tenant` | `scope` | token3.`resource_access` | token3.`tenant` |
-|---|---|---|---|---|
-| A | domain-5678 | e-rechnung | `e-rechnung: [reader, writer]` | domain-5678 |
-| **B** | **domain-1234** | **e-rechnung** | **`e-rechnung: [reader]`** | **domain-1234** |
-| C | domain-5678 | fahrtkostenerstattung | `fahrtkostenerstattung: [reader, approver]` | domain-5678 |
-| D | domain-1234 | fahrtkostenerstattung | `fahrtkostenerstattung: [reader]` | domain-1234 |
-| E | *(weggelassen)* | e-rechnung | `{}` (leer) | *(kein)* |
-| F | domain-9999 *(keine Mitgliedschaft)* | e-rechnung | `{}` (leer) | *(kein)* |
-
-Fall **B** ist der Kernbeweis: die Vereinigung `[reader, writer]` wird auf die eine Mandanten-Rolle
-`[reader]` zugeschnitten. **E/F** belegen fail-closed.
+Fall **C** ist der Kernbeweis: der Backend-User hat direkte Rollen für `fahrtkostenerstattung`
+(`reader`, `approver`) und der Scope ist `backend-requester` als Optional zugewiesen — `aud` im
+Ergebnis-Token ist korrekt `fahrtkostenerstattung`, Keycloak hätte die Rollen also normal aufgelöst.
+Weil die Assertion aber nur `service:e-rechnung` bucht, leert Mapper 2 `resource_access`
+nachträglich vollständig (siehe `Mapper2-Recherche.md`, Frage 1, für den Beleg, dass die native
+Scope-Auflösung das ohne den Mapper nicht getan hätte).
 
 ### Gemessene Claims (kanonischer Fall A)
 
-> Gemessen vor der RTM-Härtung, mit `requested_tenant=domain-5678` als Eingabe. Der `tenant`-Claim
-> in token2 kommt seither aus `token1.domain` statt aus diesem Parameter; der gezeigte Claim-Wert
-> selbst ist unverändert gültig.
-
 ```jsonc
-// token2 - Exchange/Assertion, client gateway, requested_tenant=domain-5678
+// token2 - Exchange/Assertion, client gateway, scope=access-backend service:e-rechnung
 {
   "iss": "http://localhost:8080/realms/frontend",
   "azp": "gateway",
-  "sub": "b0d49895-…",                 // = lab-user im Frontend
+  "sub": "72401c31-…",                 // = lab-user im Frontend
   "aud": "http://localhost:8181/realms/Backend-Microservices",
-  "scope": "profile access-backend email",
-  "tenant": "domain-5678",             // Mapper 1 (RTM)
-  "resource_access": null
+  "scope": "profile email access-backend service:e-rechnung",
+  "tenant": "domain-5678",             // Mapper 1 (RTM) - reiner Audit-Claim, von Mapper 2 nicht gelesen
+  "jti": "ntrtte:…"
 }
 
 // token3 - jwt-bearer, scope=e-rechnung, client backend-requester
 {
   "iss": "http://localhost:8181/realms/Backend-Microservices",
   "azp": "backend-requester",
-  "sub": "ab474215-…",                 // = lab-user im Backend
+  "sub": "ed761e0b-…",                 // = lab-user im Backend
   "aud": "e-rechnung",
-  "scope": "profile email e-rechnung tenant-restriction",
+  "scope": "profile booking-restriction email e-rechnung",
   "preferred_username": "lab-user",
-  "tenant": "domain-5678",             // Mapper 2: bestaetigt
   "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } }
+  // kein "tenant"-Claim mehr - Mapper 2 kopiert ihn nicht (anders als die Vorgaengerfassung)
+}
+```
+
+### Gemessener Fail-closed-Fall (C)
+
+```jsonc
+// token2 - bucht NUR service:e-rechnung
+{ "scope": "profile email access-backend service:e-rechnung", … }
+
+// token3 - jwt-bearer, scope=fahrtkostenerstattung (NICHT gebucht)
+{
+  "iss": "http://localhost:8181/realms/Backend-Microservices",
+  "aud": "fahrtkostenerstattung",       // Audience-Mapper feuert normal
+  "resource_access": {},                // Mapper 2: nicht gebucht -> geleert
+  "scope": "fahrtkostenerstattung profile booking-restriction email"
 }
 ```
 
 ## 8. Edge Cases
 
-- **Tenant fehlt / keine Mitgliedschaft / Gruppe existiert nicht** → fail-closed (Fälle E/F).
-- **Composite-Rollen / Parent-Gruppen:** Das Labor nutzt flache Rollen und Gruppen; `direkt ==
-  effektiv`. Bei Composites müsste die erlaubte Menge expandiert werden — hier nicht nötig.
+- **Buchung fehlt / falscher Dienst gebucht** → fail-closed (Fälle C/D).
 - **`account`/Fremd-Clients in `resource_access`:** Im Flow steht nur der Dienst-Client
-  (`fullScopeAllowed=false`). Ein etwaiger `account`-Eintrag würde mit-gefiltert — im Labor
-  irrelevant, als Annahme notiert.
+  (`fullScopeAllowed=false`). Ein etwaiger `account`-Eintrag würde ebenfalls entfernt (kann nicht
+  unter `service:*` gebucht sein) — im Labor irrelevant, als Annahme notiert.
 - **Assertion gilt genau einmal** (`Token reuse detected`): für den zweiten Dienst token2 neu holen.
 
-## 9. Offene Punkte
+## 9. Nicht Teil dieser Aufgabe
 
-- **Sicherheits-Variante (aufgeschoben):** Service zusätzlich als Claim in token2 binden und
-  gegen `scope` gegenprüfen — bindet die (Tenant, Service)-Freigabe kryptografisch an die
-  Frontend-Assertion. Für ein Lernlabor bewusst nicht umgesetzt (Overkill, zweite Mapper-1-Änderung).
-- **Nicht Teil dieser Aufgabe:** Push/Merge der Mapper-1-Commits, Altlasten E–H der Live-Instanz.
+- Push/Merge früherer Mapper-1-Commits, Altlasten der Live-Instanz des Nutzers.
+- Eine kryptografische Bindung von (Mandant, Dienst) über einen zusätzlichen Claim hinaus — die
+  Buchung ist bereits über den signierten `scope`-Claim der Assertion abgesichert.
 
 ---
 
-Gemessen am 2026-09-14 gegen Keycloak 26.7.2 in einem isolierten Compose-Stack (`-p kctest`,
-benannte Volumes), provisioniert mit `./setup-realms.sh --recreate`, verifiziert mit
-`./check-setup.sh` (grün) und dem vollständigen Flow.
+Ersetzt die frühere, gruppenbasierte Spezifikation zum inzwischen gelöschten
+`tenant-restriction-mapper`. Gemessen in einem isolierten Compose-Stack (`-p kctest`, benannte
+Volumes), provisioniert mit `./setup-realms.sh --recreate`, verifiziert mit `./check-setup.sh`
+(grün) und dem vollständigen Flow.

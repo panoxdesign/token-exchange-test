@@ -24,15 +24,14 @@ BE_REQUESTER="${BE_REQUESTER:-backend-requester}"
 IDP_ALIAS="${IDP_ALIAS:-frontend}"
 ACCESS_SCOPE="${ACCESS_SCOPE:-access-backend}"
 TARGET_USER="${TARGET_USER:-lab-user}"
-SERVICES=(e-rechnung fahrtkostenerstattung)
-# Mandanten-Gruppen im Backend:  gruppe:dienst:rolle,rolle  (muss zu setup-realms.sh passen)
-BE_GROUPS=(
-  "domain-5678:e-rechnung:writer,reader"
-  "domain-5678:fahrtkostenerstattung:reader,approver"
-  "domain-1234:e-rechnung:reader"
-  "domain-1234:fahrtkostenerstattung:reader"
+# Ziel-Dienste:  name:rolle,rolle  (muss zu setup-realms.sh passen) - die Rollen sind hier
+# zugleich die erwarteten DIREKTEN Rollen des Backend-Ziel-Users (keine Mandanten-Gruppen
+# mehr, s. docs/buchungen.csv).
+SERVICES=(
+  "e-rechnung:reader,writer"
+  "fahrtkostenerstattung:reader,approver"
 )
-TARGET_GROUPS="${TARGET_GROUPS:-domain-5678,domain-1234}"
+SERVICE_SCOPE_PREFIX="${SERVICE_SCOPE_PREFIX:-service:}"
 
 GATEWAY="${GATEWAY:-gateway}"
 SP_CLIENT="${SP_CLIENT:-self-service-portal}"
@@ -207,6 +206,17 @@ else
   else
     bad "Scope '$ACCESS_SCOPE' nicht zugewiesen" "ohne ihn kann gateway keinen externen Exchange zum Backend anstossen"
   fi
+  for entry in "${SERVICES[@]}"; do
+    SVC="${entry%%:*}"
+    SM="$SERVICE_SCOPE_PREFIX$SVC"
+    if fa "/clients/$GU/optional-client-scopes" | jq -e --arg n "$SM" 'any(.name==$n)' >/dev/null; then
+      ok "Scope '$SM' als Optional zugewiesen"
+    elif fa "/clients/$GU/default-client-scopes" | jq -e --arg n "$SM" 'any(.name==$n)' >/dev/null; then
+      warn "Scope '$SM' ist Default statt Optional - dann waere jeder Dienst immer 'gebucht', unabhaengig von der CSV"
+    else
+      bad "Scope '$SM' nicht zugewiesen" "ohne ihn kann '$GATEWAY' die Buchung dieses Dienstes nicht in token2 transportieren"
+    fi
+  done
 fi
 
 SP=$(fa "/clients?clientId=$(uri "$SP_CLIENT")" | jq '.[0] // empty')
@@ -337,7 +347,8 @@ else
   fi
 fi
 
-for SVC in "${SERVICES[@]}"; do
+for entry in "${SERVICES[@]}"; do
+  SVC="${entry%%:*}"
   head_ "2. Ziel-Dienst '$SVC'"
   SC_=$(ba "/clients?clientId=$(uri "$SVC")" | jq '.[0] // empty')
   if [ -z "$SC_" ]; then bad "Client '$SVC' fehlt"; continue; fi
@@ -354,8 +365,8 @@ for SVC in "${SERVICES[@]}"; do
       | .config["included.client.audience"] // empty' <<<"$SS")
   [ "$M" = "$SVC" ] && ok "Audience-Mapper zeigt auf '$SVC'" \
     || bad "Audience-Mapper zeigt auf '${M:-<keiner>}'" "erwartet '$SVC'"
-  SM=$(ba "/client-scopes/$SSID/scope-mappings/clients/$SU" | jq -r 'map(.name)|join(", ")')
-  [ -n "$SM" ] && ok "Role Scope Mappings: $SM" \
+  RSM=$(ba "/client-scopes/$SSID/scope-mappings/clients/$SU" | jq -r 'map(.name)|join(", ")')
+  [ -n "$RSM" ] && ok "Role Scope Mappings: $RSM" \
     || bad "Scope '$SVC' hat keine Role Scope Mappings" "ohne die filtert der Scope keine Rollen"
 done
 
@@ -377,25 +388,26 @@ else
   [ "$(jq -r '.fullScopeAllowed' <<<"$D")" = "false" ] && ok "Full scope allowed Off" \
     || bad "Full scope allowed ist On" \
            "dann landen ALLE Rollen des Users im Token, egal welcher Scope angefordert wurde"
-  for SVC in "${SERVICES[@]}"; do
+  for entry in "${SERVICES[@]}"; do
+    SVC="${entry%%:*}"
     ba "/clients/$DU/optional-client-scopes" | jq -e --arg n "$SVC" 'any(.name==$n)' >/dev/null \
       && ok "Scope '$SVC' als Optional zugewiesen" || bad "Scope '$SVC' nicht zugewiesen"
   done
 fi
 
-head_ "2. Mapper 2 (tenant-restriction) im Backend"
-TRSC=$(ba "/client-scopes" | jq --arg n "tenant-restriction" '.[] | select(.name==$n)')
-if [ -z "$TRSC" ]; then
-  bad "Client Scope 'tenant-restriction' fehlt" "ohne ihn greift Mapper 2 nicht"
+head_ "2. Mapper 2 (booking-restriction) im Backend"
+BRSC=$(ba "/client-scopes" | jq --arg n "booking-restriction" '.[] | select(.name==$n)')
+if [ -z "$BRSC" ]; then
+  bad "Client Scope 'booking-restriction' fehlt" "ohne ihn greift Mapper 2 nicht"
 else
-  ok "Client Scope 'tenant-restriction' vorhanden"
-  jq -e '.protocolMappers // [] | any(.protocolMapper=="oidc-tenant-restriction-mapper")' <<<"$TRSC" >/dev/null \
-    && ok "Tenant-Restriction-Mapper (oidc-tenant-restriction-mapper) vorhanden" \
-    || bad "Tenant-Restriction-Mapper fehlt im Scope" "ohne ihn wird token3 nicht auf den Mandanten verengt"
+  ok "Client Scope 'booking-restriction' vorhanden"
+  jq -e '.protocolMappers // [] | any(.protocolMapper=="oidc-booking-restriction-mapper")' <<<"$BRSC" >/dev/null \
+    && ok "Booking-Restriction-Mapper (oidc-booking-restriction-mapper) vorhanden" \
+    || bad "Booking-Restriction-Mapper fehlt im Scope" "ohne ihn wird token3 nicht auf die gebuchten Dienste verengt"
   if [ -n "${DU:-}" ]; then
-    ba "/clients/$DU/default-client-scopes" | jq -e --arg n "tenant-restriction" 'any(.name==$n)' >/dev/null \
-      && ok "Scope 'tenant-restriction' als Default an '$BE_REQUESTER' zugewiesen" \
-      || bad "Scope 'tenant-restriction' nicht als Default an '$BE_REQUESTER'" "sonst laeuft Mapper 2 nicht beim Bau von token3"
+    ba "/clients/$DU/default-client-scopes" | jq -e --arg n "booking-restriction" 'any(.name==$n)' >/dev/null \
+      && ok "Scope 'booking-restriction' als Default an '$BE_REQUESTER' zugewiesen" \
+      || bad "Scope 'booking-restriction' nicht als Default an '$BE_REQUESTER'" "sonst laeuft Mapper 2 nicht beim Bau von token3"
   fi
 fi
 
@@ -418,32 +430,16 @@ else
   elif [ "$L" = "${LUID:-}" ]; then ok "verknuepft mit Frontend-lab-user $L"
   else bad "verknuepft mit '$L', Frontend-lab-user ist '${LUID:-unbekannt}'" "./setup-realms.sh erneut ausfuehren"; fi
   RM=$(ba "/users/$TUID/role-mappings")
-  for SVC in "${SERVICES[@]}"; do
-    RR=$(jq -r --arg c "$SVC" '.clientMappings[$c].mappings // [] | map(.name) | join(", ")' <<<"${RM:-{\}}")
-    [ -z "$RR" ] && ok "keine direkten Rollen auf '$SVC' (Rollen kommen ueber die Gruppe)" \
-      || bad "direkte Rollen auf '$SVC': $RR" "seit Mapper 2 sollen Rollen nur ueber die Mandanten-Gruppe kommen - direkte Rollen unterlaufen den tenant-Zuschnitt"
-  done
-fi
-
-head_ "2. Mandanten-Gruppen im Backend"
-MEMBERSHIP=""
-[ -n "${TUID:-}" ] && MEMBERSHIP=$(ba "/users/$TUID/groups" | jq -r '.[].name' 2>/dev/null)
-for entry in "${BE_GROUPS[@]}"; do
-  GRP="${entry%%:*}"; rest="${entry#*:}"; GSVC="${rest%%:*}"; WANT="${rest#*:}"
-  GID=$(ba "/groups?search=$(uri "$GRP")&exact=true" | jq -r --arg n "$GRP" 'map(select(.name==$n)) | .[0].id // empty')
-  if [ -z "$GID" ]; then bad "Gruppe '$GRP' fehlt" "./setup-realms.sh ausfuehren"; continue; fi
-  ok "Gruppe '$GRP' vorhanden"
-  GSVC_UUID=$(ba "/clients?clientId=$(uri "$GSVC")" | jq -r '.[0].id // empty')
-  HAVE=$(ba "/groups/$GID/role-mappings/clients/$GSVC_UUID" | jq -r '[.[].name] | sort | join(",")')
-  WANTS=$(jq -rn --arg s "$WANT" '$s|split(",")|sort|join(",")')
-  [ "$HAVE" = "$WANTS" ] && ok "  Rollen auf '$GSVC': ${HAVE:-<keine>}" \
-    || bad "  Gruppe '$GRP' Rollen auf '$GSVC': '${HAVE:-<keine>}', erwartet '$WANTS'"
-done
-if [ -n "${TUID:-}" ]; then
-  IFS=',' read -ra WG <<<"$TARGET_GROUPS"
-  for g in "${WG[@]}"; do
-    grep -qx "$g" <<<"$MEMBERSHIP" && ok "Ziel-User Mitglied der Gruppe '$g'" \
-      || bad "Ziel-User NICHT Mitglied der Gruppe '$g'" "sonst fehlen dessen Rollen im token3"
+  # Direkte Rollen statt Mandanten-Gruppen: das Backend kennt keine Mandanten mehr, nur
+  # noch "hat der User ueberhaupt Rollen fuer diesen Dienst" - die Buchung je Mandant
+  # erzwingt Mapper 2 anhand des scope-Claims der Assertion, nicht diese Rollen selbst.
+  for entry in "${SERVICES[@]}"; do
+    SVC="${entry%%:*}"; WANT="${entry#*:}"
+    HAVE=$(jq -r --arg c "$SVC" '.clientMappings[$c].mappings // [] | map(.name) | sort | join(",")' <<<"${RM:-{\}}")
+    WANTS=$(jq -rn --arg s "$WANT" '$s|split(",")|sort|join(",")')
+    [ "$HAVE" = "$WANTS" ] && ok "direkte Rollen auf '$SVC': ${HAVE//,/, }" \
+      || bad "direkte Rollen auf '$SVC': '${HAVE:-<keine>}', erwartet '$WANTS'" \
+             "ohne die direkten Rollen bleibt resource_access leer, egal was gebucht ist"
   done
 fi
 

@@ -272,10 +272,11 @@ die `aud` hier über Rollen statt über einen Audience-Mapper entsteht.
 | Client Scope `access-backend` | Audience-Mapper auf diesen Client **und** Mapper `RTM` (`oidc-requested-tenant-mapper`), der den `domain`-Claim des subject_token (token1) als Claim `tenant` in token2 schreibt. Der Schalter, der token1 zu token2 macht |
 | Client `domain-5678` | confidential, reine Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice`. **Kein** Service Account, **kein** Token Exchange |
 | Client `domain-1234` | zweite Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice` |
-| Client `gateway` | Requester des internen **und** externen Exchange. **Standard token exchange** On, **Full scope allowed** Off, Scope `roles` als Default, `domain-5678`/`domain-1234`/`access-backend` als **Optional** |
+| Client `gateway` | Requester des internen **und** externen Exchange. **Standard token exchange** On, **Full scope allowed** Off, Scope `roles` als Default, `domain-5678`/`domain-1234`/`access-backend`/`service:e-rechnung`/`service:fahrtkostenerstattung` als **Optional** |
 | Client `self-service-portal` | Client für den Password Grant des Lab-Users, Scope `to-gateway` als **Default** |
 | Client Scopes `domain-5678`, `domain-1234` | Role Scope Mappings auf die jeweiligen Rollen, Hardcoded-Claim-Mapper `domain=<Name>` |
 | Client Scope `to-gateway` | Audience-Mapper auf `gateway` |
+| Client Scopes `service:e-rechnung`, `service:fahrtkostenerstattung` | reine Marker, **keine** Role Scope Mappings. Werden vom Frontend/BFF anhand der Buchung ([`docs/buchungen.csv`](docs/buchungen.csv)) angefordert und landen unverändert im `scope`-Claim von token2 — Mapper 2 im Backend liest sie dort wieder aus |
 | User `lab-user` | trägt die Rollen beider Domains, meldet sich per Passwort-Grant an |
 
 Details zum internen Exchange — wie die `aud` entsteht, warum `scope=` und `audience=` beide Pflicht
@@ -288,10 +289,9 @@ sind — stehen in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Excha
 | IdP `frontend` | OIDC, ohne Discovery, `jwtAuthorizationGrantEnabled`, Max assertion expiration 600s |
 | Clients `e-rechnung`, `fahrtkostenerstattung` | Ziel-Dienste (Resource Server) mit Rollen `reader`/`writer` bzw. `reader`/`approver`. **Service accounts Off** — als reine Ziele brauchen sie keine eigene Identität |
 | Client Scopes gleichen Namens | Audience-Mapper **und** Role Scope Mappings. Die Mappings entscheiden, welche Rollen bei aktivem Scope überhaupt ins Token dürfen |
-| Client `backend-requester` | Requester. *JWT Authorization Grant* On, Allow-Liste `frontend`, **Full scope allowed Off**, beide Dienst-Scopes als **Optional**, Client Scope `tenant-restriction` als **Default** |
-| Client Scope `tenant-restriction` | Mapper 2 (`oidc-tenant-restriction-mapper`): verengt `resource_access` in token3 auf die Rollen der bestätigten Mandanten-Gruppe. Default am Requester, greift bei jedem token3 |
-| Gruppen `/domain-5678`, `/domain-1234` | Mandanten-Modell: tragen je Mandant die Client-Rollen **beider** Dienste (asymmetrischer Split). Alleinige Rollenquelle des Ziel-Users |
-| User `lab-user` | Ziel-Identität, verknüpft mit dem Frontend-`lab-user` (Federated Identity), **Mitglied beider Gruppen, keine direkten Rollen** (Rollen kommen über die Gruppen, Zuschnitt über Mapper 2) |
+| Client `backend-requester` | Requester. *JWT Authorization Grant* On, Allow-Liste `frontend`, **Full scope allowed Off**, beide Dienst-Scopes als **Optional**, Client Scope `booking-restriction` als **Default** |
+| Client Scope `booking-restriction` | Mapper 2 (`oidc-booking-restriction-mapper`): verengt `resource_access` in token3 auf die Dienste, die laut `scope`-Claim der Assertion gebucht sind (Präfix `service:`). Default am Requester, greift bei jedem token3 |
+| User `lab-user` | Ziel-Identität, verknüpft mit dem Frontend-`lab-user` (Federated Identity), trägt die Client-Rollen **beider** Dienste **direkt** (keine Mandanten-Gruppen mehr — welcher Mandant was gebucht hat, weiß nur das Frontend/BFF, s. [`docs/buchungen.csv`](docs/buchungen.csv)) |
 
 ---
 
@@ -330,12 +330,14 @@ token1=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d client_id=gateway -d client_secret="$GW_SECRET" | jq -r .access_token)
 
 # 02 - externer Exchange via gateway auf das Backend. RTM liest den domain-Claim
-# aus token1 (subject_token) selbst - kein Parameter noetig.
+# aus token1 (subject_token) selbst - kein Parameter noetig. scope traegt hier
+# zusaetzlich die Buchung: das Frontend/BFF liest sie aus docs/buchungen.csv und
+# fordert nur die dort gebuchten service:*-Scopes an.
 token2=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
   -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
   -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
   -d subject_token="$token1" \
-  -d scope=access-backend \
+  -d scope="access-backend service:e-rechnung" \
   -d audience="$BI" \
   -d client_id=gateway -d client_secret="$GW_SECRET" | jq -r .access_token)
 
@@ -365,16 +367,20 @@ So sehen die Tokens bis token2 aus (gemessen, gekürzt — siehe die Bruno-Reque
 // token2 - die Assertion, externer Exchange (02) via gateway
 { "iss": "http://localhost:8080/realms/frontend", "azp": "gateway",
   "sub": "8eb1bec2-…", "aud": "http://localhost:8181/realms/Backend-Microservices",
-  "scope": "access-backend profile email", "tenant": "domain-5678",
-  "jti": "trrtte:1e1451ae-…" }
+  "scope": "profile email access-backend service:e-rechnung", "tenant": "domain-5678",
+  "jti": "ntrtte:1e1451ae-…" }
 
 // token3 - finales Access Token, jwt-bearer im Backend (03), scope=e-rechnung
 { "iss": "http://localhost:8181/realms/Backend-Microservices", "azp": "backend-requester",
   "sub": "80d521cb-…", "aud": "e-rechnung",
-  "scope": "e-rechnung profile email tenant-restriction",
-  "tenant": "domain-5678",
+  "scope": "profile booking-restriction email e-rechnung",
   "resource_access": { "e-rechnung": { "roles": ["reader", "writer"] } } }
 ```
+
+`token2.tenant` bleibt stehen (Mapper 1/RTM setzt ihn weiterhin, reiner Audit-Claim) — `token3` trägt
+seit Mapper 2 **keinen** `tenant`-Claim mehr, weil Mapper 2 ihn nicht mehr aus der Assertion kopiert
+(anders als die frühere Fassung). Das Backend braucht ihn nicht: die Zuschneidung läuft allein über
+`resource_access`.
 
 `sub` in token2 ist der **Frontend-lab-user**, kein Service-Account. Der Claim `tenant`
 (RTM-Mapper) trägt den `domain`-Claim aus **token1 selbst** (dem subject_token des Exchange) —
@@ -396,13 +402,16 @@ wählbaren Request-Parameter.
 > Fail-closed-Test unten), bei einem Major-Upgrade aber neu zu prüfen.
 
 In `token3` ist `sub` der **Backend-`lab-user`** (verknüpft mit dem Frontend-lab-user, eigene UUID,
-bei jedem Neuaufbau anders) statt wie früher `frontend-domain-5678`. **`token3` trägt jetzt einen
-bestätigten `tenant`-Claim und ist auf genau diesen Mandanten zugeschnitten** — das leistet Mapper 2
-(`oidc-tenant-restriction-mapper`, Domain B): Er liest den `tenant` aus der Assertion, prüft die
-Gruppenmitgliedschaft des Backend-Users und verengt `resource_access` auf die Rollen der bestätigten
-Mandanten-Gruppe (fail-closed ohne Treffer). Hier `tenant=domain-5678` → dessen Gruppenrollen für
-`e-rechnung` = reader,writer; mit `tenant=domain-1234` blieben nur `[reader]`. Details, alle
-gemessenen Fälle und die Quellcode-Belege:
+bei jedem Neuaufbau anders). **Das Backend kennt dabei keinen Mandanten** — `token2.tenant` ist ein
+reiner Audit-Claim, den Mapper 2 nicht auswertet. Stattdessen verengt Mapper 2
+(`oidc-booking-restriction-mapper`, Domain B) `resource_access` auf die Dienste, die laut
+`scope`-Claim der Assertion gebucht sind (Präfix `service:`): Er liest `scope` aus der Assertion,
+bildet daraus die Menge gebuchter Dienste und entfernt jeden `resource_access`-Eintrag, dessen
+Client nicht darin vorkommt (fail-closed ohne Treffer). Hier bucht token2 `service:e-rechnung` und
+der Request fordert `scope=e-rechnung` → die direkten Rollen des Backend-Users für `e-rechnung`
+(`reader`, `writer`) bleiben stehen; forderte derselbe Request stattdessen
+`scope=fahrtkostenerstattung`, obwohl nur `e-rechnung` gebucht ist, bliebe `resource_access` leer
+(siehe Gegenproben unten). Details, alle gemessenen Fälle und die Quellcode-Belege:
 [`docs/Mapper2-Spezifikation.md`](docs/Mapper2-Spezifikation.md) und
 [`docs/Mapper2-Recherche.md`](docs/Mapper2-Recherche.md). Werte oben gemessen (Keycloak 26.7.2,
 Stand dieses Setups).
@@ -418,9 +427,20 @@ curl -s -X POST "$BE/realms/Backend-Microservices/protocol/openid-connect/token"
   -d client_id=backend-requester -d client_secret="$BS" | jq
 
 # dieselbe Assertion (token2) zweimal einloesen   ->  invalid_grant: Token reuse detected
+
+# token2 aus dem Beispiel oben bucht nur service:e-rechnung - Schritt 03 mit dem
+# ANDEREN Dienst anfordern (Bruno-Request 03c):
+curl -s -X POST "$BE/realms/Backend-Microservices/protocol/openid-connect/token" \
+  -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer -d assertion="$token2" \
+  -d scope=fahrtkostenerstattung \
+  -d client_id=backend-requester -d client_secret="$BS" | jq '.access_token | split(".")[1]'
+#  -> resource_access: {}  (fail-closed, Mapper 2: nicht gebucht - siehe Mapper2-Spezifikation.md)
 ```
 
-Die erste zeigt, wofür Schritt 02 da ist. Die zweite, dass jede Assertion genau einmal gilt.
+Die erste zeigt, wofür Schritt 02 da ist. Die zweite, dass jede Assertion genau einmal gilt. Die
+dritte, dass Mapper 2 tatsächlich durchsetzt statt nur zu vertrauen: der Backend-User *hat* Rollen
+für `fahrtkostenerstattung` und der Scope ist dem Requester zugewiesen — ohne Mapper 2 käme hier ein
+normales Token zurück (belegt in `docs/Mapper2-Recherche.md`).
 
 ### Der geschlossene Angriffsweg: `requested_tenant`-Spoofing
 
@@ -442,9 +462,13 @@ token2=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
 
 Gemessenes Ergebnis: `token2.tenant` ist `domain-5678` — **nicht** `domain-1234`. `requested_tenant`
 wird von der Server-Implementierung gar nicht mehr gelesen; der Claim folgt ausschließlich
-`token1.domain`. token3 trägt entsprechend weiter nur die `domain-5678`-Rollen für `e-rechnung`
-(`reader`, `writer`), nicht die (kleineren) `domain-1234`-Rollen. Vor der Härtung wäre
-`token2.tenant` hier `domain-1234` gewesen.
+`token1.domain`. Vor der Härtung wäre `token2.tenant` hier `domain-1234` gewesen.
+
+Seit der Umstellung auf Buchungs-Scopes (Mapper 2, s. u.) hat dieser Claim ohnehin **keine**
+Auswirkung mehr auf token3: Mapper 2 liest `tenant` gar nicht, `resource_access` hängt nur noch an
+den gebuchten `service:*`-Scopes. `token2.tenant` bleibt ein reiner Audit-Claim — die ursprüngliche
+Spoofing-Gefahr (fremder Mandant → fremde Rollen) existiert im Backend nicht mehr, weil das Backend
+seit diesem Umbau gar keine Mandanten mehr kennt.
 
 ---
 
@@ -469,7 +493,7 @@ docker compose logs -f backend-keycloak
 | `invalid_grant: Invalid token audience` | die Assertion war nicht an diesen Realm adressiert |
 | `invalid_scope` | der Scope existiert nicht oder ist dem Requester nicht zugewiesen |
 | zu viele Rollen in token3 | **Full scope allowed** ist On, oder die Rollen stecken in den Default-Rollen des Realms |
-| token3 ohne Rollen und ohne `tenant`-Claim | Mapper 2 hat fail-closed: `tenant` fehlt in der Assertion, oder der Backend-User ist nicht Mitglied der genannten Mandanten-Gruppe |
+| `resource_access` in token3 leer | Mapper 2 hat fail-closed: der in Schritt 03 angeforderte `scope=` ist nicht als `service:<scope>` im `scope`-Claim der Assertion gebucht (erwartetes Verhalten, s. Gegenproben und Request `03c`) |
 | `requested_tenant=…` im Request 02 ändert nichts an `token2.tenant` | erwartetes Verhalten seit der Härtung — RTM liest `tenant` ausschließlich aus `token1.domain`, ein Request-Parameter wird nicht mehr ausgewertet |
 
 ---

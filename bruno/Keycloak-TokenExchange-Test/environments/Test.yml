@@ -30,6 +30,12 @@ variables:
   - name: SVC_FAHRTKOSTEN
     value: fahrtkostenerstattung
     description: ""
+  - name: SERVICE_SCOPE_ERECHNUNG
+    value: "service:e-rechnung"
+    description: Buchungs-Marker-Scope im Frontend - landet unveraendert im scope-Claim von token2
+  - name: SERVICE_SCOPE_FAHRTKOSTEN
+    value: "service:fahrtkostenerstattung"
+    description: Buchungs-Marker-Scope im Frontend - landet unveraendert im scope-Claim von token2
   - name: GATEWAY_CLIENT
     value: gateway
     description: Requester-Client des internen Exchange im Frontend-Realm

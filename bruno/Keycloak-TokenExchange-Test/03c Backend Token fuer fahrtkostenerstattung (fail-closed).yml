@@ -1,0 +1,46 @@
+info:
+  name: 03c Backend Token fuer fahrtkostenerstattung (fail-closed)
+  type: http
+  seq: 5
+
+docs: |
+  Gegenprobe zu Request 03b: dieselbe Assertion wie in 03a (token2 aus Request
+  02, bucht per Default nur service:e-rechnung), aber scope=fahrtkostenerstattung
+  im Request - ein Dienst, den token2 NICHT gebucht hat.
+
+  Der Backend-User hat direkte Rollen fuer fahrtkostenerstattung (reader,
+  approver) und der Scope ist dem Requester zugewiesen - ohne den
+  Booking-Restriction-Mapper wuerde Keycloak hier ganz normal Rollen ausliefern
+  (belegt in docs/Mapper2-Recherche.md, Frage 1: die native Scope-Aufloesung
+  bildet keine Schnittmenge mit dem scope-Claim der Assertion). Der Mapper
+  erzwingt die Buchung nachtraeglich und leert resource_access.
+
+  Erwartung:
+    aud              fahrtkostenerstattung
+    resource_access  {}  (leer - fail-closed, nicht gebucht)
+
+  Vor jedem Lauf Request 02 neu ausfuehren - Assertions gelten genau einmal.
+
+http:
+  method: POST
+  url: "{{BE_URL}}/realms/{{BE_REALM}}/protocol/openid-connect/token"
+  body:
+    type: form-urlencoded
+    data:
+      - name: grant_type
+        value: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+      - name: assertion
+        value: "{{token2}}"
+      - name: scope
+        value: "{{SVC_FAHRTKOSTEN}}"
+      - name: client_id
+        value: "{{BE_REQUESTER_CLIENT}}"
+      - name: client_secret
+        value: "{{BE_REQUESTER_SECRET}}"
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
