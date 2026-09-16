@@ -5,9 +5,13 @@
 #   Frontend-Realm  frontend
 #     domain-5678                Ziel-Domain des internen Exchange, Rollen admin, selfservice
 #     domain-1234                zweite Ziel-Domain, Rollen admin, selfservice
-#     <backend-issuer-url>       Client, der nur als Audience-Ziel existiert
-#     access-backend             Client Scope mit Audience-Mapper und RTM-Mapper
-#                                 (subject_token.domain -> Claim tenant)
+#     <backend-issuer-url>       Client, der nur als Audience-Ziel existiert (keine eigene Rolle)
+#     access-backend             Client Scope mit RTM-Mapper (subject_token.domain -> Claim
+#                                 tenant) und dem Selfservice-Exchange-Gate-Mapper
+#                                 (oidc-selfservice-exchange-gate): traegt die Backend-aud nur ein,
+#                                 wenn der AKTIVE Mandant aus token1 (subject_token) die Rolle
+#                                 selfservice hat - statische Rollen (Role Scope Mapping) koennen
+#                                 den aktiven Mandanten nicht sehen, s. selfservice-exchange-gate/
 #     service:e-rechnung / ...   Client Scopes, reine Marker (keine Role Scope Mappings).
 #                                 Transportieren die Buchung eines Dienstes im scope-Claim
 #                                 von token2 - das Frontend/BFF waehlt sie anhand der CSV
@@ -15,7 +19,9 @@
 #                                 darf Token Exchange
 #     self-service-portal        Client fuer den Password Grant des Lab-Users
 #     to-gateway                 Client Scope mit Audience-Mapper auf gateway
-#     lab-user                   User, traegt die Rollen aus domain-5678 und domain-1234
+#     lab-user                   User, traegt admin+selfservice auf domain-5678, aber NUR admin
+#                                 auf domain-1234 (LAB_USER_DOMAIN_ROLES) - macht den Gate-Mapper
+#                                 sichtbar: externer Exchange gelingt nur aus domain-5678
 #
 #   Backend-Realm   Backend-Microservices
 #     frontend                   Identity Provider, akzeptiert JWT Authorization Grants
@@ -76,6 +82,15 @@ SEC_SP="${SEC_SP:-lab-frontend-sp-secret}"
 FE_DOMAINS=(
   "domain-5678:admin,selfservice"
   "domain-1234:admin,selfservice"
+)
+
+# Welche der oben definierten Rollen lab-user TATSAECHLICH pro Domain bekommt - bewusst
+# asymmetrisch: nur domain-5678 traegt selfservice. Der Selfservice-Exchange-Gate-Mapper liest
+# diese Rolle aus dem AKTIVEN Mandanten (token1.domain), deshalb macht erst diese Asymmetrie den
+# Gate sichtbar - aus domain-1234 gelingt der interne Exchange (admin reicht), der externe scheitert.
+LAB_USER_DOMAIN_ROLES=(
+  "domain-5678:admin,selfservice"
+  "domain-1234:admin"
 )
 
 # Ziel-Dienste:  name:rolle,rolle
@@ -243,6 +258,25 @@ ensure_requested_tenant_mapper() { # base token realm scopeId
   ok "RTM-Mapper angelegt"
 }
 
+ensure_selfservice_gate_mapper() { # base token realm scopeId audienceClient role
+  # Traegt audienceClient nur in aud ein, wenn der AKTIVE Mandant (subject_token.domain)
+  # die Rolle hat - der eingebaute AudienceResolveProtocolMapper sieht nur STATISCHE
+  # Rollenzuweisungen und kann den aktiven Mandanten nicht unterscheiden. Siehe
+  # selfservice-exchange-gate/README.md.
+  req "$1" "$2" GET "/admin/realms/$3/client-scopes/$4/protocol-mappers/models"
+  if jq -e --arg a "$5" 'any(.protocolMapper == "oidc-selfservice-exchange-gate"
+        and .config["included.client.audience"] == $a)' <"$BODY" >/dev/null; then
+    skip "Selfservice-Exchange-Gate-Mapper vorhanden"; return
+  fi
+  req "$1" "$2" POST "/admin/realms/$3/client-scopes/$4/protocol-mappers/models" \
+    "$(jq -nc --arg a "$5" --arg r "$6" '{
+      name:"selfservice-exchange-gate", protocol:"openid-connect",
+      protocolMapper:"oidc-selfservice-exchange-gate",
+      config:{"included.client.audience":$a,"role":$r}}')"
+  [ "$RC" = "201" ] || die "Selfservice-Exchange-Gate-Mapper anlegen fehlgeschlagen (HTTP $RC): $(cat "$BODY")"
+  ok "Selfservice-Exchange-Gate-Mapper angelegt"
+}
+
 ensure_booking_restriction_mapper() { # base token realm scopeId
   # Mapper 2: verengt resource_access in token3 auf die Dienste, die laut scope-Claim
   # der Assertion (Praefix "service:") gebucht sind. config bleibt leer, der Mapper
@@ -320,6 +354,20 @@ assign_client_roles_to_user() { # base token realm userId clientUuid label
   esac
 }
 
+assign_named_client_roles_to_user() { # base token realm userId clientUuid rolesCsv label
+  # Wie assign_client_roles_to_user, aber nur die in rolesCsv genannten Rollen - fuer den
+  # asymmetrischen Split (LAB_USER_DOMAIN_ROLES): manche Domains sollen nicht ALLE dort
+  # definierten Rollen an lab-user vergeben.
+  req "$1" "$2" GET "/admin/realms/$3/clients/$5/roles"
+  local ROLE_JSON; ROLE_JSON=$(jq -c --arg csv "$6" '
+    ($csv | split(",")) as $want | [.[] | select(.name as $n | $want | index($n))]' <"$BODY")
+  req "$1" "$2" POST "/admin/realms/$3/users/$4/role-mappings/clients/$5" "$ROLE_JSON"
+  case "$RC" in
+    204|409) ok "Rollen '$6' von '$7' zugewiesen" ;;
+    *) die "Rollenzuweisung '$7' fehlgeschlagen (HTTP $RC): $(cat "$BODY")" ;;
+  esac
+}
+
 ensure_user() { # base token realm username -> echo userId
   req "$1" "$2" GET "/admin/realms/$3/users?username=$(jq -rn --arg s "$4" '$s|@uri')&exact=true"
   local id; id=$(jq -r '.[0].id // empty' <"$BODY")
@@ -371,9 +419,11 @@ ensure_password() { # base token realm userId password
 step "Frontend-Realm '$FE_REALM'"
 ensure_realm "$FE" "$FE_TOK" "$FE_REALM"
 
-# Client, dessen Client-ID die Issuer-URL des Backends IST. Der Audience-Mapper
-# kann nur die ID eines existierenden Clients in aud schreiben, und aud muss laut
-# RFC 7523 der Issuer des empfangenden Servers sein. Daher dieser Name.
+# Client, dessen Client-ID die Issuer-URL des Backends IST. Der existiert nur als
+# Audience-Ziel - aud muss laut RFC 7523 der Issuer des empfangenden Servers sein,
+# und nur die ID eines EXISTIERENDEN Clients kann in aud landen. Keine eigene Rolle
+# mehr hier: der Gate laeuft ueber den Selfservice-Exchange-Gate-Mapper unten, nicht
+# ueber eine statische Rollenzuweisung an diesem Client.
 AUD_JSON=$(jq -nc --arg id "$BE_ISSUER" --arg sec "$SEC_AUDIENCE" '{
   clientId:$id, name:"backend", enabled:true, protocol:"openid-connect",
   publicClient:false, secret:$sec,
@@ -382,8 +432,13 @@ AUD_JSON=$(jq -nc --arg id "$BE_ISSUER" --arg sec "$SEC_AUDIENCE" '{
 ensure_client "$FE" "$FE_TOK" "$FE_REALM" "$BE_ISSUER" "$AUD_JSON" >/dev/null
 
 ACCESS_SCOPE_ID=$(ensure_scope "$FE" "$FE_TOK" "$FE_REALM" "$ACCESS_SCOPE")
-ensure_audience_mapper "$FE" "$FE_TOK" "$FE_REALM" "$ACCESS_SCOPE_ID" "$BE_ISSUER"
 ensure_requested_tenant_mapper "$FE" "$FE_TOK" "$FE_REALM" "$ACCESS_SCOPE_ID"
+# Gate fuer den externen Exchange: liest den AKTIVEN Mandanten aus token1 (subject_token)
+# selbst und traegt die Backend-aud nur ein, wenn dessen resource_access die Rolle
+# 'selfservice' enthaelt. Ein Role Scope Mapping auf einen Audience-Ziel-Client (wie
+# zuvor) waere mandanten-blind: der eingebaute AudienceResolveProtocolMapper sieht nur
+# STATISCHE Rollenzuweisungen, nicht welche Domain token1 gerade zugeschnitten ist.
+ensure_selfservice_gate_mapper "$FE" "$FE_TOK" "$FE_REALM" "$ACCESS_SCOPE_ID" "$BE_ISSUER" "selfservice"
 
 # --- Interner Token Exchange: Gateway-Kette -----------------------------------
 # Zweiter, in sich geschlossener Exchange innerhalb des Frontend-Realms: ein
@@ -488,9 +543,20 @@ ensure_password "$FE" "$FE_TOK" "$FE_REALM" "$LAB_USER_ID" "$LAB_PASS"
 
 # Hier - und nur hier - entscheidet sich, was im getauschten Token an Rollen
 # ankommt. Aus dem Subject-Token kommen keine Berechtigungen.
-for entry in $FE_DOMAIN_UUIDS; do
-  DOM="${entry%%:*}"; rest="${entry#*:}"; DOM_UUID="${rest#*:}"
-  assign_client_roles_to_user "$FE" "$FE_TOK" "$FE_REALM" "$LAB_USER_ID" "$DOM_UUID" "$DOM"
+#
+# Bewusst NICHT alle Rollen aus FE_DOMAINS, sondern nur die in LAB_USER_DOMAIN_ROLES
+# genannten: der asymmetrische Split (selfservice nur auf domain-5678) ist der Test
+# fuer den Selfservice-Exchange-Gate-Mapper - aus domain-1234 muss der interne Exchange
+# gelingen (admin reicht), der externe aber scheitern (keine selfservice-Rolle dort).
+for entry in "${LAB_USER_DOMAIN_ROLES[@]}"; do
+  DOM="${entry%%:*}"; WANT_ROLES="${entry#*:}"
+  DOM_UUID=""
+  for fe_entry in $FE_DOMAIN_UUIDS; do
+    fe_dom="${fe_entry%%:*}"; fe_rest="${fe_entry#*:}"
+    [ "$fe_dom" = "$DOM" ] && DOM_UUID="${fe_rest#*:}"
+  done
+  [ -n "$DOM_UUID" ] || die "Domain '$DOM' aus LAB_USER_DOMAIN_ROLES ist nicht in FE_DOMAINS definiert"
+  assign_named_client_roles_to_user "$FE" "$FE_TOK" "$FE_REALM" "$LAB_USER_ID" "$DOM_UUID" "$WANT_ROLES" "$DOM"
 done
 
 # =============================================================================

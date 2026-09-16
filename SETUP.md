@@ -212,13 +212,14 @@ domain-5678  (Ziel-Domain)                              Full scope allowed: OFF
        │                                                       fahrtkostenerstattung
        │ zurueck an gateway:                                  (beide optional)
        │ scope=access-backend                                      │
-       │ (RTM liest domain aus token1 selbst)                      │ scope= entscheidet
+       │ (Gate-Mapper prueft die Rolle selfservice IM               │ scope= entscheidet
+       │  aktiven Mandanten aus token1, RTM liest domain)           │
        ▼                                                           ▼
-<backend-issuer-url>                              federated identity
-  Client, nur Audience-Ziel                               │
-       ▲                                                  ▼
-       │ Audience-Mapper + RTM                       lab-user            e-rechnung
-access-backend (Client Scope)                     Rollen s.o.          reader, writer
+<backend-issuer-url>                               federated identity
+  Client, nur Audience-Ziel                                │
+       ▲                                                   ▼
+       │ Gate-Mapper + RTM                          lab-user            e-rechnung
+access-backend (Client Scope)                      Rollen s.o.          reader, writer
                                                                      fahrtkostenerstattung
                                                                            reader
 ```
@@ -264,12 +265,27 @@ self-service-portal ──token_sp (aud: gateway)──► gateway ──scope=/
 Ausführlich in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Exchange.md) — dort auch, wie
 die `aud` hier über Rollen statt über einen Audience-Mapper entsteht.
 
+> **Ein Custom-Mapper autorisiert jetzt Schritt 02 — mandantenabhängig.** `aud:
+> <backend-issuer-url>` in token2 entsteht weder über einen fest verdrahteten
+> `oidc-audience-mapper` noch über ein natives Role Scope Mapping auf einen Audience-Ziel-Client
+> (das wäre **mandanten-blind**: der eingebaute `AudienceResolveProtocolMapper` sieht nur
+> *statische* Rollenzuweisungen des Users, nicht für welche Domain token1 gerade ausgestellt
+> wurde). Stattdessen liest der Custom-Mapper `SelfserviceExchangeGateMapper`
+> (`oidc-selfservice-exchange-gate`, siehe [`selfservice-exchange-gate/README.md`](selfservice-exchange-gate/README.md))
+> **token1 selbst**: dessen `domain`-Claim (der aktive Mandant) und die darunter aufgelösten
+> Rollen in `resource_access`. Nur wenn dort `selfservice` steht, trägt er die Backend-Issuer-URL
+> in `aud` ein. `lab-user` hat `selfservice` nur auf `domain-5678`, nicht auf `domain-1234`
+> (`LAB_USER_DOMAIN_ROLES` in `setup-realms.sh`) — der externe Exchange gelingt deshalb nur, wenn
+> token1 für `domain-5678` ausgestellt wurde. Aus `domain-1234` bleibt `aud` leer, der Exchange
+> scheitert mit `Requested audience not available`, während der interne Exchange (token1) aus
+> beiden Domains unverändert funktioniert (`admin` reicht dafür). Siehe den gemessenen Beleg unten.
+
 ### Frontend-Realm `frontend`
 
 | Objekt | Zweck |
 |---|---|
-| Client `http://localhost:8181/realms/Backend-Microservices` | existiert nur als Audience-Ziel. Der Audience-Mapper kann nur die ID eines *existierenden* Clients in `aud` schreiben, und `aud` muss der Issuer des Empfängers sein — daher der URL-förmige Name |
-| Client Scope `access-backend` | Audience-Mapper auf diesen Client **und** Mapper `RTM` (`oidc-requested-tenant-mapper`), der den `domain`-Claim des subject_token (token1) als Claim `tenant` in token2 schreibt. Der Schalter, der token1 zu token2 macht |
+| Client `http://localhost:8181/realms/Backend-Microservices` | existiert nur als Audience-Ziel, **keine eigene Rolle**. Der Audience-Mapper/Gate-Mapper kann nur die ID eines *existierenden* Clients in `aud` schreiben, und `aud` muss der Issuer des Empfängers sein — daher der URL-förmige Name |
+| Client Scope `access-backend` | Mapper `RTM` (`oidc-requested-tenant-mapper`, schreibt `tenant` aus `token1.domain`) **und** Mapper `Selfservice Exchange Gate` (`oidc-selfservice-exchange-gate`): setzt `aud` auf die Backend-Issuer-URL nur, wenn `token1.resource_access[token1.domain]` die Rolle `selfservice` enthält — liest also den **aktiven** Mandanten aus token1, nicht die statischen Rollen des Users. Der Schalter, der token1 zu token2 macht |
 | Client `domain-5678` | confidential, reine Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice`. **Kein** Service Account, **kein** Token Exchange |
 | Client `domain-1234` | zweite Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice` |
 | Client `gateway` | Requester des internen **und** externen Exchange. **Standard token exchange** On, **Full scope allowed** Off, Scope `roles` als Default, `domain-5678`/`domain-1234`/`access-backend`/`service:e-rechnung`/`service:fahrtkostenerstattung` als **Optional** |
@@ -277,7 +293,7 @@ die `aud` hier über Rollen statt über einen Audience-Mapper entsteht.
 | Client Scopes `domain-5678`, `domain-1234` | Role Scope Mappings auf die jeweiligen Rollen, Hardcoded-Claim-Mapper `domain=<Name>` |
 | Client Scope `to-gateway` | Audience-Mapper auf `gateway` |
 | Client Scopes `service:e-rechnung`, `service:fahrtkostenerstattung` | reine Marker, **keine** Role Scope Mappings. Werden vom Frontend/BFF anhand der Buchung ([`docs/buchungen.csv`](docs/buchungen.csv)) angefordert und landen unverändert im `scope`-Claim von token2 — Mapper 2 im Backend liest sie dort wieder aus |
-| User `lab-user` | trägt die Rollen beider Domains, meldet sich per Passwort-Grant an |
+| User `lab-user` | trägt auf `domain-5678` die Rollen `admin`+`selfservice`, auf `domain-1234` **nur** `admin` (`LAB_USER_DOMAIN_ROLES`) — die Asymmetrie, die den externen Gate testbar macht. Meldet sich per Passwort-Grant an |
 
 Details zum internen Exchange — wie die `aud` entsteht, warum `scope=` und `audience=` beide Pflicht
 sind — stehen in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Exchange.md).
@@ -364,7 +380,9 @@ So sehen die Tokens bis token2 aus (gemessen, gekürzt — siehe die Bruno-Reque
   "scope": "domain-5678 profile email",
   "resource_access": { "domain-5678": { "roles": ["admin", "selfservice"] } } }
 
-// token2 - die Assertion, externer Exchange (02) via gateway
+// token2 - die Assertion, externer Exchange (02) via gateway. aud entsteht nur, weil
+// token1.resource_access.domain-5678 (s.o.) die Rolle selfservice enthaelt - der
+// Selfservice-Exchange-Gate-Mapper hat sie dort gelesen, nicht am User statisch nachgeschlagen.
 { "iss": "http://localhost:8080/realms/frontend", "azp": "gateway",
   "sub": "8eb1bec2-…", "aud": "http://localhost:8181/realms/Backend-Microservices",
   "scope": "profile email access-backend service:e-rechnung", "tenant": "domain-5678",
@@ -476,6 +494,66 @@ reiner Audit-Claim — die ursprüngliche Spoofing-Gefahr (fremder Mandant → f
 im Backend nicht mehr, weil das Backend
 seit diesem Umbau gar keine Mandanten mehr kennt.
 
+### Ohne die Rolle `selfservice` im aktiven Mandanten: der externe Exchange bleibt zu
+
+Der Gate-Punkt für „darf dieser User gerade zum Backend wechseln" ist die Rolle `selfservice`
+**im aktiven Mandanten** — nicht irgendeine statische Zuweisung. `lab-user` trägt `selfservice`
+nur auf `domain-5678`, auf `domain-1234` nur `admin` (`LAB_USER_DOMAIN_ROLES` in
+`setup-realms.sh`). Der interne Exchange (05a/05b) braucht `selfservice` gar nicht — er gelingt aus
+**beiden** Domains, `admin` reicht:
+
+```bash
+# 05b fuer domain-1234 statt domain-5678 - Rollen dort: nur admin
+token1_1234=$(curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
+  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
+  -d subject_token="$token_sp" \
+  -d audience=domain-1234 -d scope=domain-1234 \
+  -d client_id=gateway -d client_secret="$GW_SECRET" | jq -r .access_token)
+```
+
+Gemessen (kctest-Stack, Keycloak 26.7.2) liefert das ein gültiges token1 mit
+`"resource_access": { "domain-1234": { "roles": ["admin"] } }` — **kein** `selfservice` darin, weil
+`lab-user` es für diese Domain nicht trägt. Schritt 02 mit genau diesem token1 als subject_token:
+
+```bash
+curl -s -X POST "$FE/realms/frontend/protocol/openid-connect/token" \
+  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
+  -d subject_token="$token1_1234" \
+  -d scope="access-backend service:e-rechnung" -d audience="$BI" \
+  -d client_id=gateway -d client_secret="$GW_SECRET" | jq
+```
+
+Gemessene Antwort (kctest-Stack, Keycloak 26.7.2):
+
+```json
+{ "error": "invalid_request",
+  "error_description": "Requested audience not available: http://localhost:8181/realms/Backend-Microservices" }
+```
+
+Dieselbe Meldung steht im Frontend-Log (`docker compose logs frontend-keycloak`, Event
+`TOKEN_EXCHANGE_ERROR`, gemessen):
+
+```
+type="TOKEN_EXCHANGE_ERROR", ... clientId="gateway", ... error="invalid_request",
+reason="Requested audience not available: http://localhost:8181/realms/Backend-Microservices",
+auth_method="token_exchange", grant_type="urn:ietf:params:oauth:grant-type:token-exchange", ...
+username="lab-user"
+```
+
+Der `Selfservice-Exchange-Gate-Mapper` hat hier `token1_1234.domain` (`domain-1234`) gelesen,
+darunter in `resource_access` nachgesehen, `selfservice` nicht gefunden und **nichts** zu `aud`
+hinzugefügt (fail-closed). Weil der Request `audience=` explizit anfordert, prüft
+`restrictRequestedAudience` sofort, ob sich diese Audience überhaupt auflösen lässt, und bricht
+ohne Treffer den ganzen Exchange ab (`invalid_request`, kein Token). Schritt 03 wird dadurch gar
+nicht erst erreicht — ohne gültiges token2 gibt es keine Assertion, die sich einlösen ließe.
+
+Mit demselben `token1_1234` gelingt dagegen weiterhin der interne Exchange (05a) — der ist mit dem
+obigen Aufruf bereits erfolgreich demonstriert; `admin` allein reicht dafür aus. Nur der externe
+Schritt (02) unterscheidet die beiden Domains, und zwar **ausschließlich** anhand des Inhalts von
+token1 — nicht anhand einer für den User global geltenden Rolle.
+
 ---
 
 ## Troubleshooting
@@ -489,7 +567,8 @@ docker compose logs -f backend-keycloak
 | Fehler | Ursache |
 |---|---|
 | `unauthorized_client` in Schritt 2 | *Standard token exchange* am Frontend-Client aus |
-| token2 ohne `aud` | `scope=access-backend` vergessen, oder Scope nicht als *Optional* zugewiesen |
+| token2 ohne `aud` (bei `audience=` weggelassen) | `scope=access-backend` vergessen, Scope nicht als *Optional* zugewiesen, oder token1 wurde für einen Mandanten ausgestellt, in dem `lab-user` die Rolle `selfservice` nicht hat |
+| `invalid_request: Requested audience not available: <backend-issuer-url>` in Schritt 02 | derselbe Grund wie oben, aber mit explizitem `audience=` im Request (wie in der Kette oben) — `restrictRequestedAudience` bricht dann sofort ab statt still auf `aud` zu verzichten. Meist: token1 (subject_token) stammt aus einem Mandanten ohne `selfservice`, z.B. `domain-1234` (s. Abschnitt oben) — der Gate-Mapper liest das aus token1, nicht aus einer statischen User-Rolle |
 | `No Identity Provider for provided issuer` | `iss` ≠ `issuer` im IdP — meist eine localhost/Container-Verwechslung |
 | Timeout in Schritt 3 | `jwksUrl` zeigt auf `localhost` statt auf `frontend-keycloak` |
 | `Identity Provider is not allowed for the client` | IdP fehlt in der Allow-Liste des Requester-Clients |

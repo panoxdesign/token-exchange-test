@@ -1,9 +1,11 @@
 etc/backend-db
 etc/frontend-db
 
-# Maven-Build-Artefakte des Wegwerf-Builders (requested-tenant-mapper, booking-restriction-mapper)
+# Maven-Build-Artefakte des Wegwerf-Builders (requested-tenant-mapper, booking-restriction-mapper,
+# selfservice-exchange-gate)
 requested-tenant-mapper/target/
 booking-restriction-mapper/target/
+selfservice-exchange-gate/target/
 
 # Snapshot des Ist-Stands (siehe docs/Ist-Konfiguration.md), kein Repo-Artefakt
 ist-export/
