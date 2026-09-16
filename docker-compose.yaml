@@ -22,6 +22,7 @@ services:
       - "8080:8080"
     volumes:
       - ./requested-tenant-mapper/target/requested-tenant-mapper.jar:/opt/keycloak/providers/requested-tenant-mapper.jar
+      - ./selfservice-exchange-gate/target/selfservice-exchange-gate.jar:/opt/keycloak/providers/selfservice-exchange-gate.jar
     environment:
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
       - KC_BOOTSTRAP_ADMIN_PASSWORD=admin

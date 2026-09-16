@@ -183,3 +183,15 @@ ausgestellten Access Token auf genau diese Dienste. Ohne Treffer wird `resource_
 geleert (fail-closed). Das Backend kennt dabei keine Mandanten mehr — welcher Mandant welchen
 Dienst gebucht hat, steht nur im Frontend/BFF (`docs/buchungen.csv`, Zwischenlösung). Siehe
 `booking-restriction-mapper/README.md`.
+
+## Unterpaket `selfservice-exchange-gate`
+
+Custom Protocol Mapper für Keycloak. Wird im Frontend-Keycloak verwendet (Client Scope
+`access-backend`, neben RTM). Gated den externen Token Exchange (token2 → token3) auf die
+Client-Rolle `selfservice` im **aktiven Mandanten** — der Domain, auf die das `subject_token`
+(token1) zugeschnitten ist. Liest dazu `token1.domain` und `token1.resource_access.<domain>.roles`
+und trägt die konfigurierte Backend-Issuer-URL nur dann als `aud` in token2 ein, wenn die Rolle dort
+vorhanden ist; sonst fail-closed (nichts hinzufügen, Exchange scheitert mit `Requested audience not
+available`). Ein natives Role Scope Mapping würde hier nicht reichen: der eingebaute
+`AudienceResolveProtocolMapper` sieht nur statische Rollenzuweisungen, nicht welche Domain
+`token1` gerade zugeschnitten ist. Siehe `selfservice-exchange-gate/README.md`.

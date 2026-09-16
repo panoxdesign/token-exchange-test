@@ -38,6 +38,12 @@ SP_CLIENT="${SP_CLIENT:-self-service-portal}"
 SP_SCOPE="${SP_SCOPE:-to-gateway}"
 LAB_USER="${LAB_USER:-lab-user}"
 FE_DOMAINS=(domain-5678 domain-1234)
+# Erwartete lab-user-Rollen je Domain (muss zu setup-realms.sh LAB_USER_DOMAIN_ROLES passen) -
+# bewusst asymmetrisch: nur domain-5678 traegt selfservice, das ist der Kern des externen Gates.
+LAB_USER_DOMAIN_ROLES=(
+  "domain-5678:admin,selfservice"
+  "domain-1234:admin"
+)
 
 FE_ISSUER="$FE/realms/$FE_REALM"
 BE_ISSUER="$BE/realms/$BE_REALM"
@@ -115,26 +121,19 @@ if [ -z "$AUDC" ]; then
   bad "Audience-Client '$BE_ISSUER' fehlt" "Client-ID ist die Issuer-URL des Backends"
 else
   ok "Audience-Client '$BE_ISSUER' vorhanden"
-  AUDU=$(jq -r '.id' <<<"$AUDC")
-  fa "/clients/$AUDU/roles" | jq -e 'any(.name=="selfservice")' >/dev/null \
-    && ok "Rolle 'selfservice' vorhanden" \
-    || bad "Rolle 'selfservice' fehlt" \
-           "gated den externen Exchange - ohne sie kann kein User ueber Rollen in die Backend-aud aufgeloest werden"
 fi
 
 SC=$(fa "/client-scopes" | jq --arg n "$ACCESS_SCOPE" '.[] | select(.name==$n)')
 if [ -n "$SC" ]; then
   ok "Client Scope '$ACCESS_SCOPE' vorhanden"
-  if [ -n "${AUDU:-}" ]; then
-    fa "/client-scopes/$(jq -r '.id' <<<"$SC")/scope-mappings/clients/$AUDU" \
-      | jq -e 'any(.name=="selfservice")' >/dev/null \
-      && ok "Role Scope Mapping 'selfservice' auf '$ACCESS_SCOPE' gesetzt" \
-      || bad "Role Scope Mapping 'selfservice' auf '$ACCESS_SCOPE' fehlt" \
-             "ohne es traegt der AudienceResolveProtocolMapper keine Backend-aud in token2 - Requested audience not available"
-  fi
   jq -e '.protocolMappers // [] | any(.protocolMapper=="oidc-requested-tenant-mapper")' <<<"$SC" >/dev/null \
     && ok "RTM-Mapper (oidc-requested-tenant-mapper) vorhanden" \
     || bad "RTM-Mapper fehlt" "ohne ihn bekommt token2 keinen tenant-Claim"
+  jq -e --arg a "$BE_ISSUER" '.protocolMappers // [] | any(.protocolMapper=="oidc-selfservice-exchange-gate"
+      and .config["included.client.audience"]==$a)' <<<"$SC" >/dev/null \
+    && ok "Selfservice-Exchange-Gate-Mapper zeigt auf '$BE_ISSUER'" \
+    || bad "Selfservice-Exchange-Gate-Mapper fehlt oder zeigt auf falsche Audience" \
+           "ohne ihn resolvt der externe Exchange keine Backend-aud - unabhaengig von statischen Rollen, der Mapper liest den AKTIVEN Mandanten aus token1"
 else
   bad "Client Scope '$ACCESS_SCOPE' fehlt"
 fi
@@ -311,16 +310,29 @@ else
     && ok "Passwort-Credential vorhanden" \
     || bad "kein Passwort-Credential" "ohne Passwort kein Passwort-Grant"
   RM=$(fa "/users/$LUID/role-mappings")
-  for DM in "${FE_DOMAINS[@]}"; do
-    RR=$(jq -r --arg c "$DM" '.clientMappings[$c].mappings // [] | map(.name) | join(", ")' <<<"${RM:-{\}}")
-    [ -n "$RR" ] && ok "Rollen auf '$DM': $RR" \
-      || bad "keine Rollen auf '$DM'" "dann ist resource_access im Token leer"
+  # Rollen-Matrix statt reiner Existenzpruefung: der externe Exchange soll nur aus domain-5678
+  # gelingen, deshalb muss die Zuweisung EXAKT LAB_USER_DOMAIN_ROLES entsprechen, nicht nur
+  # "irgendeine Rolle vorhanden".
+  for entry in "${LAB_USER_DOMAIN_ROLES[@]}"; do
+    DM="${entry%%:*}"; WANT="${entry#*:}"
+    RR=$(jq -r --arg c "$DM" '.clientMappings[$c].mappings // [] | map(.name) | sort | join(",")' <<<"${RM:-{\}}")
+    WANTS=$(jq -rn --arg s "$WANT" '$s|split(",")|sort|join(",")')
+    [ "$RR" = "$WANTS" ] && ok "Rollen auf '$DM': ${RR//,/, }" \
+      || bad "Rollen auf '$DM': '${RR:-<keine>}', erwartet '$WANTS'" \
+             "dann ist resource_access im Token fuer diesen Mandanten falsch besetzt"
   done
-  jq -e --arg c "$BE_ISSUER" '.clientMappings[$c].mappings // [] | any(.name=="selfservice")' \
-    <<<"${RM:-{\}}" >/dev/null \
-    && ok "Rolle 'selfservice' auf '$BE_ISSUER': vorhanden" \
-    || bad "keine Rolle 'selfservice' auf '$BE_ISSUER'" \
-           "ohne sie resolvt der externe Exchange keine Backend-aud fuer diesen User"
+  # Kern des Gates, separat ausgewiesen: jede Domain OHNE selfservice in LAB_USER_DOMAIN_ROLES
+  # darf die Rolle auch tatsaechlich nicht tragen - genau die Unterscheidung, die der
+  # Selfservice-Exchange-Gate-Mapper anhand des AKTIVEN Mandanten treffen muss.
+  for entry in "${LAB_USER_DOMAIN_ROLES[@]}"; do
+    DM="${entry%%:*}"; WANT="${entry#*:}"
+    case ",$WANT," in *,selfservice,*) continue ;; esac
+    jq -e --arg c "$DM" '.clientMappings[$c].mappings // [] | any(.name=="selfservice") | not' \
+      <<<"${RM:-{\}}" >/dev/null \
+      && ok "KEINE Rolle 'selfservice' auf '$DM' (Kern des externen Gates)" \
+      || bad "Rolle 'selfservice' faelschlich auf '$DM'" \
+             "der externe Exchange waere aus '$DM' dann faelschlich moeglich"
+  done
 fi
 
 default_role_check fa "1b. Default-Rollen des Frontend-Realms" \

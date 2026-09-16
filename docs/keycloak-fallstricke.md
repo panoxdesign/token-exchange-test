@@ -28,11 +28,15 @@ Diese Punkte haben schon Zeit gekostet und sind in `SETUP.md` ausführlich besch
 - Das Admin-Token des `master`-Realms lebt **60 Sekunden**.
 - Die aussagekräftige Fehlermeldung steht im Server-Log, nicht in der HTTP-Antwort:
   `docker compose logs -f backend-keycloak`.
-- **Standard Token Exchange V2 kennt keinen Gate über eine User-Rolle.** Es gibt keine Einstellung
-  „nur User mit Rolle X dürfen tauschen" — Protocol Mapper laufen scope-, nicht rollengesteuert,
-  und eine Role-Scope-Mapping-Zuweisung allein schaltet nichts ab. Der native Weg führt über `aud`:
-  der eingebaute `AudienceResolveProtocolMapper` trägt einen Client nur dann in `aud` ein, wenn der
-  User dort eine **gescopte** Rolle hat (`fullScopeAllowed:false` vorausgesetzt). Eine Rolle am
-  Ziel-Client plus Role Scope Mapping auf den anfordernden Scope wird damit zum User-Rollen-Gate —
-  ohne die Rolle bleibt `aud` leer und der Exchange schlägt mit `Requested audience not available`
-  fehl. Siehe `SETUP.md`, Abschnitt „Ohne die Rolle `selfservice`: der externe Exchange bleibt zu".
+- **Ein mandanten-abhängiger Gate über eine User-Rolle braucht einen Custom-Mapper — ein
+  natives Role Scope Mapping reicht nicht.** Naheliegend wäre, den externen Exchange über eine
+  Rolle an einem Ziel-Client zu gaten (Role Scope Mapping, ausgewertet vom eingebauten
+  `AudienceResolveProtocolMapper`). Das gated aber nur **statisch** — der Mapper leitet `aud` aus
+  den Rollenzuweisungen des Users ab, unabhängig davon, für welchen Mandanten das `subject_token`
+  gerade ausgestellt wurde. Er kann den „aktiven Mandanten" gar nicht sehen: der steckt
+  ausschließlich im **Inhalt** des `subject_token` (hier: `domain`-Claim plus
+  `resource_access.<domain>.roles`), und kein natives Mapping liest diesen Inhalt aus. Nur ein
+  Custom-Mapper, der das `subject_token` selbst dekodiert (wie `RequestedTenantMapper`), kann
+  „hat der User Rolle X **im gerade aktiven Mandanten**" prüfen und danach `aud` setzen oder
+  fail-closed leer lassen. Siehe `selfservice-exchange-gate/README.md` und `SETUP.md`, Abschnitt
+  „Ohne die Rolle `selfservice` im aktiven Mandanten: der externe Exchange bleibt zu".
