@@ -6,9 +6,15 @@ aus der mitgeschickten Assertion, filtert darin die Einträge mit Präfix `servi
 Dienste) und verengt `resource_access` im ausgestellten Access Token auf genau diese Dienste. Ohne
 Treffer wird `resource_access` komplett geleert (fail-closed).
 
-Zusätzlich schreibt er den `tenant`-Claim aus der Assertion als reinen Audit-Claim nach token3 —
-aber fail-closed-konsistent nur, wenn nach dem Verengen mindestens ein Dienst in `resource_access`
-übrig geblieben ist. Bleibt `resource_access` leer, bleibt token3 auch ohne `tenant`-Claim.
+Der Mapper tut nur etwas, wenn `grant_type` `urn:ietf:params:oauth:grant-type:jwt-bearer` ist. Die
+Signatur der Assertion prüft er dabei bewusst nicht selbst — das übernimmt der Grant selbst über den
+IdP-JWKS, gegen einen fremden Aussteller (das Frontend-Realm) kann der Mapper im Backend ohnehin
+nicht lokal prüfen.
+
+Zusätzlich schreibt er den `tenant`-Claim aus der Assertion als mandantenbindenden Claim nach
+token3, den Backend-Dienste zur Datentrennung nutzen müssen — aber fail-closed-konsistent nur, wenn
+nach dem Verengen mindestens ein Dienst in `resource_access` übrig geblieben ist. Bleibt
+`resource_access` leer, bleibt token3 auch ohne `tenant`-Claim.
 
 Anders als der frühere `tenant-restriction-mapper` kennt das Backend dabei **keine Mandanten**
 mehr: Es prüft nur noch, ob ein Dienst laut Assertion gebucht ist — welcher Mandant das ist und ob

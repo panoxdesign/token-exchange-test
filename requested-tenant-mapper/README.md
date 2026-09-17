@@ -2,13 +2,18 @@
 
 Custom Protocol Mapper "Requested Tenant Mapper" fuer **Domain A** (`frontend-keycloak`). Er liest
 beim Standard Token Exchange (token1 -> token2) den `domain`-Claim aus dem subject_token (token1)
-und schreibt ihn als `tenant`-Claim in die ausgestellte Assertion (token2). Der subject_token ist
-bereits vom Exchange signaturgeprueft, bevor Mapper laufen - eine erneute Pruefung ist hier nicht
-noetig. Ein Request-Parameter wird bewusst **nicht** entgegengenommen: fruehere Fassungen lasen
-`requested_tenant` frei aus den Form-Parametern, was Privilege Escalation erlaubte (Aufrufer konnte
-sich einen beliebigen Mandanten aussuchen). Seit der Umstellung auf Buchungs-Scopes ist `tenant`
-ein reiner Audit-Claim: Domain B kennt keine Mandanten mehr, Mapper 2 (`booking-restriction-mapper/`)
-kopiert ihn nur nach token3 und wertet ihn nicht zur Autorisierung aus.
+und schreibt ihn als `tenant`-Claim in die ausgestellte Assertion (token2). Der Mapper tut nur etwas,
+wenn `grant_type` Token Exchange ist, prueft die Signatur des subject_token selbst ueber
+`session.tokens().decode(subjectToken, AccessToken.class)` (ungueltige Signatur -> null ->
+fail-closed) und verlangt zusaetzlich, dass `domain` in der `aud` von token1 steht - sonst waere der
+Claim bei zwei gleichzeitig angeforderten Domain-Scopes mehrdeutig. Ein Request-Parameter wird
+bewusst **nicht** entgegengenommen: fruehere Fassungen lasen `requested_tenant` frei aus den
+Form-Parametern, was Privilege Escalation erlaubte (Aufrufer konnte sich einen beliebigen Mandanten
+aussuchen). Seit der Umstellung auf Buchungs-Scopes wertet Domain B `tenant` nicht mehr zur
+Autorisierung aus - trotzdem ist er kein reiner Audit-Claim, sondern der mandantenbindende Claim:
+der einzige Mandanten-Hinweis in token3, auf den Backend-Dienste zur Datentrennung angewiesen sind
+(siehe SETUP.md). Mapper 2 (`booking-restriction-mapper/`) kopiert ihn nur nach token3, ohne ihn
+selbst auszuwerten.
 
 ## JAR bauen
 
@@ -118,3 +123,6 @@ Erwartet (gemessen):
 
 Ein zusaetzlich mitgeschickter `requested_tenant=domain-1234` aendert daran nichts mehr — der
 Mapper liest den Parameter gar nicht erst.
+
+`./test-chain.sh` deckt das automatisiert ab: T1 (Positivkette), T6 (`requested_tenant`-Spoofing)
+und T11 (zwei gleichzeitige Domain-Scopes, `domain ∈ aud`).

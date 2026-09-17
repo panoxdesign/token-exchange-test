@@ -1,5 +1,6 @@
 package com.example.keycloak.mappers;
 
+import org.keycloak.OAuth2Constants;
 import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.jose.jws.JWSInputException;
 import org.keycloak.models.ClientSessionContext;
@@ -109,8 +110,12 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
 
     // Bruecke A: liest die Assertion direkt aus den Form-Parametern des Requests (dieselbe
     // Quelle, aus der auch der jwt-bearer-Grant sie liest) und dekodiert sie wie der Grant
-    // selbst. Keine erneute Signaturpruefung noetig, der Grant hat die Assertion vor dem
-    // Token-Bau schon validiert.
+    // selbst. Neu: grant_type muss jwt-bearer sein, sonst koennte ein fremder Grant einen
+    // selbstgebauten assertion-Parameter unterschieben. Die JWSInput-Dekodierung ohne erneute
+    // Signaturpruefung bleibt aber bewusst bestehen (anders als bei RTM/Gate): die Assertion
+    // stammt vom fremden Frontend-Realm, dessen Schluessel der Backend-Realm nicht lokal hat -
+    // session.tokens().decode(...) kann hier nicht pruefen. Der jwt-bearer-Grant hat die
+    // Signatur ueber den IdP-JWKS bereits vor dem Token-Bau geprueft.
     //
     // Dekodiert wird als JsonWebToken, nicht als AccessToken: "scope" ist dort kein
     // deklariertes Feld (das liegt nur in AccessToken), sondern landet ueber @JsonAnySetter
@@ -122,6 +127,10 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
 
         var formParams = session.getContext().getHttpRequest().getDecodedFormParameters();
         if (formParams == null) {
+            return new AssertionDaten(Collections.emptySet(), null);
+        }
+
+        if (!OAuth2Constants.JWT_AUTHORIZATION_GRANT.equals(formParams.getFirst(OAuth2Constants.GRANT_TYPE))) {
             return new AssertionDaten(Collections.emptySet(), null);
         }
 

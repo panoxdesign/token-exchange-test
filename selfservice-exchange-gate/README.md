@@ -32,8 +32,20 @@ aktiven Mandanten vorhanden ist), bleibt sie erhalten und Schritt 02 liefert tok
 nicht, bleibt `aud` leer, und Schritt 02 scheitert hart mit `invalid_request: Requested audience
 not available` - es gibt dann gar kein token2, Schritt 03 ist unerreichbar.
 
-Fail-closed: Fehlt der subject_token, sein `domain`-Claim, `resource_access` fuer diese Domain oder
-die Rolle darin, wird nichts hinzugefuegt.
+Fail-closed: Fehlt der subject_token, laeuft kein Token-Exchange-Grant, ist die Signatur des
+subject_token ungueltig, steht `domain` nicht in dessen `aud`, oder fehlen `domain`-Claim,
+`resource_access` fuer diese Domain oder die Rolle darin, wird nichts hinzugefuegt.
+
+## Warum der Mapper selbst prueft
+
+`grant_type` und Signatur waren bisher ungeprueft, weil `access-backend` nur an `gateway` haengt und
+der nur Token Exchange kann - eine reine Konfigurationsannahme, die kein Code erzwingt. Haengt ein
+Admin `access-backend` faelschlich an einen anderen Client oder schaltet an `gateway` einen weiteren
+Grant frei, koennte ein Aufrufer einen selbstgebauten, unsignierten `subject_token`-Parameter
+unterschieben. Gemessener Gegenbeweis: Password Grant mit `scope=access-backend` und einem
+selbstgebauten `subject_token` (`domain=domain-1234`,
+`resource_access.domain-1234.roles=[selfservice]`) liefert seit dieser Haertung ein Token ohne
+Backend-`aud` - vorher haette der Mapper sie faelschlich gesetzt.
 
 ## Konfiguration
 

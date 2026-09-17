@@ -40,3 +40,8 @@ Diese Punkte haben schon Zeit gekostet und sind in `SETUP.md` ausführlich besch
   „hat der User Rolle X **im gerade aktiven Mandanten**" prüfen und danach `aud` setzen oder
   fail-closed leer lassen. Siehe `selfservice-exchange-gate/README.md` und `SETUP.md`, Abschnitt
   „Ohne die Rolle `selfservice` im aktiven Mandanten: der externe Exchange bleibt zu".
+- **Custom-Mapper, die Form-Parameter wie `subject_token`/`assertion` lesen, müssen `grant_type`
+  und (bei Tokens des eigenen Realms) die Signatur selbst prüfen** — sonst kann ein anderer Grant am
+  selben Client einen selbstgebauten Parameter unterschieben, sobald der Scope dort hängt. Siehe
+  `check-setup.sh` (prüft Scope-Zuordnung und dass an den Clients keine weiteren Grants aktiv sind)
+  und `test-chain.sh` (Verhaltens-Regressionstest gegen genau diese Annahme).

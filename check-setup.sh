@@ -93,6 +93,43 @@ default_role_check() { # accessor title [zusatz]
   fi
 }
 
+# Vier-Flags-Pruefung fuer Review L1: neben dem einen vorgesehenen Grant duerfen keine weiteren
+# Grants aktiv sein, sonst koennte ein Aufrufer ueber diesen weiteren Grant einen selbstgebauten
+# subject_token/assertion-Parameter mitschicken (die Mapper pruefen zwar grant_type und - bei
+# RTM/Gate - die Signatur, aber der Grant-Kontext soll erst gar nicht offenstehen). Fuer beide
+# Realms nutzbar, deshalb eine Funktion statt zweimal desselben Blocks.
+no_other_grants() { # clientJson label
+  local clientJson="$1" label="$2" sf da im sa aktiv=""
+  sf=$(jq -r '.standardFlowEnabled' <<<"$clientJson")
+  da=$(jq -r '.directAccessGrantsEnabled' <<<"$clientJson")
+  im=$(jq -r '.implicitFlowEnabled' <<<"$clientJson")
+  sa=$(jq -r '.serviceAccountsEnabled' <<<"$clientJson")
+  [ "$sf" = "true" ] && aktiv="$aktiv standardFlowEnabled"
+  [ "$da" = "true" ] && aktiv="$aktiv directAccessGrantsEnabled"
+  [ "$im" = "true" ] && aktiv="$aktiv implicitFlowEnabled"
+  [ "$sa" = "true" ] && aktiv="$aktiv serviceAccountsEnabled"
+  if [ -z "$aktiv" ]; then
+    ok "keine weiteren Grants aktiv ($label)"
+  else
+    bad "weitere Grants aktiv:$aktiv" \
+        "ueber einen weiteren Grant koennte ein Aufrufer einen selbstgebauten subject_token- bzw. assertion-Parameter mitschicken (Review L1)"
+  fi
+}
+
+# Client-IDs (zeilenweise), an die scopeName als Default- oder Optional-Client-Scope haengt.
+# accessor ist "fa" oder "ba". Fuer beide Realms nutzbar, deshalb eine Funktion statt zweimal
+# desselben Blocks.
+clients_with_scope() { # accessor scopeName
+  local accessor="$1" scopeName="$2" id cid
+  $accessor "/clients?max=200" | jq -r '.[] | .id + "|" + .clientId' \
+  | while IFS='|' read -r id cid; do
+      if $accessor "/clients/$id/default-client-scopes" | jq -e --arg n "$scopeName" 'any(.name==$n)' >/dev/null \
+         || $accessor "/clients/$id/optional-client-scopes" | jq -e --arg n "$scopeName" 'any(.name==$n)' >/dev/null; then
+        echo "$cid"
+      fi
+    done
+}
+
 # --- 0 -----------------------------------------------------------------------
 head_ "0. Erreichbarkeit und Issuer"
 A=$(curl -sf "$FE_ISSUER/.well-known/openid-configuration" 2>/dev/null | jq -r '.issuer // empty')
@@ -136,6 +173,18 @@ if [ -n "$SC" ]; then
            "ohne ihn resolvt der externe Exchange keine Backend-aud - unabhaengig von statischen Rollen, der Mapper liest den AKTIVEN Mandanten aus token1"
 else
   bad "Client Scope '$ACCESS_SCOPE' fehlt"
+fi
+
+# Konfigurationsdrift zu L1: der Scope traegt RTM- und Gate-Mapper und darf deshalb nur an den
+# Exchange-Requester haengen.
+TREFFER=$(clients_with_scope fa "$ACCESS_SCOPE")
+if [ -z "$TREFFER" ]; then
+  bad "Scope '$ACCESS_SCOPE' an keinem Client zugewiesen"
+elif [ "$TREFFER" = "$GATEWAY" ]; then
+  ok "Scope '$ACCESS_SCOPE' haengt an genau einem Client: '$GATEWAY'"
+else
+  bad "Scope '$ACCESS_SCOPE' haengt an: $(tr '\n' ' ' <<<"$TREFFER")" \
+      "Gate-/RTM-Mapper liefen dann in einem fremden Grant-Kontext - der Mapper prueft zwar grant_type und Signatur, aber der Scope gehoert trotzdem nur an den Exchange-Requester (Review L1)"
 fi
 
 C=$(fa "/clients?clientId=$(uri "$DOMAIN")" | jq '.[0] // empty')
@@ -192,6 +241,7 @@ else
   [ "$(jq -r '.fullScopeAllowed' <<<"$GW")" = "false" ] && ok "Full scope allowed Off" \
     || bad "Full scope allowed ist On" \
            "greift, wenn der Aufrufer audience weglaesst - dann traegt das Token jede Client-Rolle des Users"
+  no_other_grants "$GW" "nur Token Exchange"
   # Der Weg zur aud fuehrt hier ueber Rollen, nicht ueber einen Audience-Mapper:
   # der Client Scope 'roles' bringt den eingebauten AudienceResolveProtocolMapper mit.
   fa "/clients/$GU/default-client-scopes" | jq -e 'any(.name=="roles")' >/dev/null \
@@ -414,6 +464,7 @@ else
   [ "$(jq -r '.fullScopeAllowed' <<<"$D")" = "false" ] && ok "Full scope allowed Off" \
     || bad "Full scope allowed ist On" \
            "dann landen ALLE Rollen des Users im Token, egal welcher Scope angefordert wurde"
+  no_other_grants "$D" "nur JWT Authorization Grant"
   for entry in "${SERVICES[@]}"; do
     SVC="${entry%%:*}"
     ba "/clients/$DU/optional-client-scopes" | jq -e --arg n "$SVC" 'any(.name==$n)' >/dev/null \
@@ -434,6 +485,17 @@ else
     ba "/clients/$DU/default-client-scopes" | jq -e --arg n "booking-restriction" 'any(.name==$n)' >/dev/null \
       && ok "Scope 'booking-restriction' als Default an '$BE_REQUESTER' zugewiesen" \
       || bad "Scope 'booking-restriction' nicht als Default an '$BE_REQUESTER'" "sonst laeuft Mapper 2 nicht beim Bau von token3"
+  fi
+  # Konfigurationsdrift zu L1: Mapper 2 prueft nur grant_type (keine Signatur, die Assertion
+  # stammt vom fremden Frontend-Realm), der Scope darf deshalb nur am Requester haengen.
+  BRTREFFER=$(clients_with_scope ba "booking-restriction")
+  if [ -z "$BRTREFFER" ]; then
+    bad "Scope 'booking-restriction' an keinem Client zugewiesen"
+  elif [ "$BRTREFFER" = "$BE_REQUESTER" ]; then
+    ok "Scope 'booking-restriction' haengt an genau einem Client: '$BE_REQUESTER'"
+  else
+    bad "Scope 'booking-restriction' haengt an: $(tr '\n' ' ' <<<"$BRTREFFER")" \
+        "Mapper 2 liefe dann in einem fremden Grant-Kontext - der Mapper prueft zwar grant_type, aber der Scope gehoert trotzdem nur an den Requester (Review L1)"
   fi
 fi
 
