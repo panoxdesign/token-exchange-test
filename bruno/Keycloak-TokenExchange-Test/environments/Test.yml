@@ -17,10 +17,7 @@ variables:
     description: Issuer des Backends - audience beim Exchange, aud der Assertion
   - name: ACCESS_SCOPE
     value: access-backend
-    description: Optionaler Scope im Frontend, aktiviert den Audience-Mapper
-  - name: DOMAIN_CLIENT
-    value: domain-5678
-    description: Frontend-Client - Ziel-Domain des internen Exchange
+    description: Optionaler Scope im Frontend, traegt RTM- und Selfservice-Exchange-Gate-Mapper (setzt die Backend-aud nur bei selfservice im aktiven Mandanten)
   - name: BE_REQUESTER_CLIENT
     value: backend-requester
     description: Backend-Client, loest die Assertion per jwt-bearer ein (baut token3)
@@ -38,25 +35,22 @@ variables:
     description: Buchungs-Marker-Scope im Frontend - landet unveraendert im scope-Claim von token2
   - name: GATEWAY_CLIENT
     value: gateway
-    description: Requester-Client des internen Exchange im Frontend-Realm
+    description: Requester-Client des internen UND externen Exchange im Frontend-Realm
   - name: SP_CLIENT
     value: self-service-portal
     description: Client fuer den Passwort-Grant des Lab-Users
   - name: LAB_USER
     value: lab-user
-    description: Traegt die Rollen aus domain-5678 und domain-1234
+    description: Traegt admin+selfservice auf domain-5678, nur admin auf domain-1234
   - name: LAB_PASS
     value: lab-user
     description: ""
   - name: DOMAIN_5678
     value: domain-5678
-    description: Ziel-Domain fuer den internen Exchange, Rollen reader/writer
+    description: Ziel-Domain fuer den internen Exchange, Rollen admin/selfservice
   - name: DOMAIN_1234
     value: domain-1234
-    description: Ziel-Domain fuer den internen Exchange, Rollen reader/approver
-  - name: FE_DOMAIN_SECRET
-    value: lab-frontend-domain-5678-secret
-    description: Secret von domain-5678 im Frontend-Realm
+    description: Ziel-Domain fuer den internen Exchange, Rollen admin/selfservice (lab-user hat hier nur admin)
   - name: BE_REQUESTER_SECRET
     value: lab-backend-requester-secret
     description: Secret von backend-requester im Backend-Realm
@@ -66,9 +60,3 @@ variables:
   - name: SP_SECRET
     value: lab-frontend-sp-secret
     description: Secret des self-service-portal-Clients im Frontend-Realm
-  - name: TOKEN_EXCHANGE_CLIENT
-    value: external-token-exchange
-    description: ""
-  - name: TOKEN_EXCHANGE_CLIENT_SECRET
-    value: yPhY2tgXjzuxClpJC0wqTS6edSsl0xGo8rj0KFx7dA2Yct5lw5LW4JmyR11hVTAQeJQmyphjNZlAkXVSz0oQXb
-    description: ""
