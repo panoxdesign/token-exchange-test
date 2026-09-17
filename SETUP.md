@@ -26,8 +26,9 @@ docker compose up -d
 ./check-setup.sh
 ```
 
-Das Provisionierungs-Skript legt beide Realms komplett an und gibt am Ende die drei curl-Aufrufe
-mit eingesetzten Werten aus. `check-setup.sh` prüft jeden Punkt einzeln und ist rein lesend.
+Vorher einmalig die drei Mapper-JARs bauen (Befehle im Abschnitt „Testablauf", Schritt 1) — ohne
+sie startet der Stack nicht. Das Provisionierungs-Skript legt beide Realms komplett an und gibt am
+Ende die vier curl-Aufrufe mit eingesetzten Werten aus. `check-setup.sh` prüft jeden Punkt einzeln und ist rein lesend.
 
 ---
 
@@ -58,11 +59,10 @@ Beide Bausteine sind in 26.7 offiziell supported — **kein** Preview-Feature, k
 > technisch Token Exchange **plus** JWT Authorization Grant. Der alte einzelne Request mit
 > `subject_issuer` (Legacy Token Exchange V1) kann das zwar, ist aber deprecated.
 
-Dass V2 ausschließlich realm-intern arbeitet, lässt sich auch **ohne** zweiten Keycloak vorführen:
-`setup-realms.sh` baut im selben Frontend-Realm eine zweite, unabhängige Kette auf — ein Gateway
-tauscht das Token eines Self-Service-Portals gegen ein auf eine Domain zugeschnittenes Token. Kein
-IdP, kein gespiegelter User, dafür ein normales Bearer-Token statt des Einmal-Tickets aus Schritt 2
-oben. Beschrieben in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Exchange.md).
+Dass V2 ausschließlich realm-intern arbeitet, zeigt schon die erste Stufe der Kette, ganz **ohne**
+zweiten Keycloak: Im Frontend-Realm tauscht ein Gateway das Token eines Self-Service-Portals gegen
+ein auf eine Domain zugeschnittenes Token (token1). Kein IdP, kein gespiegelter User, dafür ein
+normales Bearer-Token statt des Einmal-Tickets aus Schritt 2 oben. Beschrieben in [`docs/Interner-Token-Exchange.md`](docs/Interner-Token-Exchange.md).
 
 ---
 
@@ -122,7 +122,7 @@ Die ganze Trennung zwischen den beiden Diensten hängt an diesem einen Schalter.
 
 ### 5. Die Abbildung ist eindeutig — und nicht beeinflussbar
 
-Ein Frontend-Service-Account entspricht **genau einer** Backend-Identität, dauerhaft. Der Grant
+Ein Frontend-User (hier `lab-user`) entspricht **genau einer** Backend-Identität, dauerhaft. Der Grant
 schlägt den Ziel-User ausschließlich über den `sub` der Assertion nach
 (`FederatedIdentityEntity.java:40`):
 
@@ -138,9 +138,10 @@ noch der Scope können den Ziel-User verändern. Wer welchen `sub` präsentiert,
 Signatur des Frontends.
 
 Variieren kann die Kette deshalb nur zwei Dinge — **welchen Dienst** das Token adressiert (`scope=`)
-und **wie viel** es dort darf (die Rollen des Users). Nie *wer* es ist. Soll `domain-5678` je nach
-Kontext als verschiedene Backend-Identitäten auftreten, braucht es entsprechend viele
-**Frontend**-Service-Accounts; die Abbildung hängt am `sub`.
+und **wie viel** es dort darf (die Rollen des Users). Nie *wer* es ist. Soll derselbe Frontend-User
+je nach Kontext als verschiedene Backend-Identitäten auftreten, braucht es entsprechend viele
+**Frontend**-User; die Abbildung hängt am `sub`. Der aktive Mandant (`domain-5678` oder
+`domain-1234`) ändert daran nichts — er reist als `tenant`-Claim mit, nicht als Identität.
 
 Zwei Details am Rand: Der Primärschlüssel der Tabelle ist `(user, identityProvider)` — ein User kann
 pro IdP nur eine Verknüpfung haben. Er verhindert aber *nicht*, dass zwei Backend-User auf denselben
@@ -367,7 +368,7 @@ token3=$(curl -s -X POST "$BE/realms/Backend-Microservices/protocol/openid-conne
 jwt "$token3"
 ```
 
-So sehen die Tokens bis token2 aus (gemessen, gekürzt — siehe die Bruno-Requests `04`, `05a`, `02`):
+So sehen die vier Tokens aus (gemessen, gekürzt — siehe die Bruno-Requests `04`, `05a`, `02`, `03a`):
 
 ```jsonc
 // token_sp - Password Grant, noch ohne jeden Bezug zur Ziel-Domain

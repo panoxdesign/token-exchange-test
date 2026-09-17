@@ -64,4 +64,9 @@ docs: |
     sub               <UUID des lab-user>
     domain            domain-1234
     scope             profile email domain-1234
-    resource_access   { "domain-1234": { "roles": ["approver", "reader"] } }
+    resource_access   { "domain-1234": { "roles": ["admin"] } }
+
+  Kein selfservice: lab-user traegt die Rolle nur auf domain-5678. Der interne
+  Exchange gelingt trotzdem (admin reicht), aber Request 02 mit diesem token1
+  scheitert mit invalid_request: Requested audience not available - der
+  Negativfall des Selfservice-Exchange-Gates, siehe SETUP.md.

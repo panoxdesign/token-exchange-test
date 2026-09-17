@@ -37,7 +37,7 @@ Auf dem Host wird weder Java noch Maven benötigt — der Build läuft komplett 
 Aus dem Repo-Root:
 
 ```bash
-docker build --output type=local,dest=./target ./booking-restriction-mapper
+docker build --output type=local,dest=./booking-restriction-mapper/target ./booking-restriction-mapper
 ```
 
 Aus diesem Unterordner:

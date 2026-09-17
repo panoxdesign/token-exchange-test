@@ -7,5 +7,5 @@ requested-tenant-mapper/target/
 booking-restriction-mapper/target/
 selfservice-exchange-gate/target/
 
-# Snapshot des Ist-Stands (siehe docs/Ist-Konfiguration.md), kein Repo-Artefakt
+# Partial-Export einer laufenden Instanz (Admin-API), kein Repo-Artefakt
 ist-export/

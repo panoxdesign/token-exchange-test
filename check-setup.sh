@@ -3,9 +3,9 @@
 # Prueft die von setup-realms.sh erzeugte Konfiguration gegen die Admin-API.
 # Aendert nichts - reine Diagnose. Exit-Code 1, wenn etwas fehlt.
 #
-# Deckt zwei Ketten ab: den cross-realm Exchange (Frontend -> Backend, Abschnitte
-# 0/1/2) und den internen Exchange innerhalb des Frontend-Realms ueber ein
-# Gateway (Abschnitt 1b).
+# Deckt beide Stufen der Kette ab: den internen Exchange innerhalb des
+# Frontend-Realms ueber ein Gateway (Abschnitt 1b) und den cross-realm Exchange
+# (Frontend -> Backend, Abschnitte 0/1/2).
 #
 #   ./check-setup.sh
 #   DOMAIN=domain-1234 ./check-setup.sh
@@ -154,7 +154,7 @@ else
     || bad "Standard token exchange On" "domain-5678 soll keinen Exchange mehr selbst anstossen"
   if fa "/clients/$U/optional-client-scopes" | jq -e --arg n "$ACCESS_SCOPE" 'any(.name==$n)' >/dev/null \
      || fa "/clients/$U/default-client-scopes" | jq -e --arg n "$ACCESS_SCOPE" 'any(.name==$n)' >/dev/null; then
-    warn "Scope '$ACCESS_SCOPE' ist '$DOMAIN' weiterhin zugewiesen - Altlast, siehe docs/Ist-Konfiguration.md"
+    warn "Scope '$ACCESS_SCOPE' ist '$DOMAIN' weiterhin zugewiesen - Altlast aus der Zeit, als die Domain den externen Exchange selbst ausloeste"
   else
     ok "Scope '$ACCESS_SCOPE' nicht zugewiesen"
   fi

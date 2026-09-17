@@ -76,4 +76,7 @@ docs: |
     sub               <UUID des lab-user>   - derselbe wie in 04, die Identitaet bleibt
     domain            domain-5678
     scope             domain-5678 profile email
-    resource_access   { "domain-5678": { "roles": ["reader", "writer"] } }
+    resource_access   { "domain-5678": { "roles": ["admin", "selfservice"] } }
+
+  selfservice ist hier der Schluessel fuer Request 02: der Gate-Mapper liest
+  diese Rolle aus token1 (aktiver Mandant), nicht statisch am User.

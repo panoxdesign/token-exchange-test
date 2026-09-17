@@ -6,8 +6,9 @@ und schreibt ihn als `tenant`-Claim in die ausgestellte Assertion (token2). Der 
 bereits vom Exchange signaturgeprueft, bevor Mapper laufen - eine erneute Pruefung ist hier nicht
 noetig. Ein Request-Parameter wird bewusst **nicht** entgegengenommen: fruehere Fassungen lasen
 `requested_tenant` frei aus den Form-Parametern, was Privilege Escalation erlaubte (Aufrufer konnte
-sich einen beliebigen Mandanten aussuchen). Die eigentliche Pruefung der Mandanten-Mitgliedschaft
-passiert weiterhin spaeter in Domain B durch einen zweiten Mapper (nicht Teil dieses Unterprojekts).
+sich einen beliebigen Mandanten aussuchen). Seit der Umstellung auf Buchungs-Scopes ist `tenant`
+ein reiner Audit-Claim: Domain B kennt keine Mandanten mehr, Mapper 2 (`booking-restriction-mapper/`)
+kopiert ihn nur nach token3 und wertet ihn nicht zur Autorisierung aus.
 
 ## JAR bauen
 

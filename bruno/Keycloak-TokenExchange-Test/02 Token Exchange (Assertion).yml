@@ -52,9 +52,9 @@ docs: |
     audience=<Backend>          grenzt die Audiences auf das Backend ein
                                  (Downscoping).
 
-  Erlaubt ist der Exchange, weil domain-5678 sein EIGENES Token tauscht. Bei
-  einem fremden Token muesste der anfragende Client im aud des subject_token
-  stehen.
+  Erlaubt ist der Exchange, weil gateway der azp von token1 ist - es tauscht
+  ein Token, das es selbst (in Request 05a) erhalten hat. Bei einem fremden
+  Token muesste der anfragende Client im aud des subject_token stehen.
 
   Erwartung:
     aud    http://localhost:8181/realms/Backend-Microservices

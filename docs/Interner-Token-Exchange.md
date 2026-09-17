@@ -28,7 +28,7 @@ FRONTEND-REALM  frontend  (intern, kein zweiter Keycloak)
 ───────────────────────────────────────────────────────
 
 lab-user
-  Rollen: domain-5678 [admin, selfservice], domain-1234 [admin, selfservice]
+  Rollen: domain-5678 [admin, selfservice], domain-1234 [admin]  (LAB_USER_DOMAIN_ROLES)
       │
       │ grant_type=password
       ▼
@@ -69,7 +69,7 @@ Exchange), und die Ziel-Domains `domain-5678`/`domain-1234` (Audience-Ziele übe
 | Client Scope `to-gateway` | expliziter `oidc-audience-mapper` auf `gateway`, als Default am SP-Client |
 | Client Scope `domain-5678` | Role Scope Mappings auf die Rollen von `domain-5678`, `oidc-hardcoded-claim-mapper` `domain=domain-5678` |
 | Client Scope `domain-1234` | Role Scope Mappings auf die Rollen von `domain-1234`, `oidc-hardcoded-claim-mapper` `domain=domain-1234` |
-| User `lab-user` | trägt die Rollen beider Domains, meldet sich per Passwort-Grant an |
+| User `lab-user` | trägt Rollen in beiden Domains, aber asymmetrisch: `admin`+`selfservice` auf `domain-5678`, **nur** `admin` auf `domain-1234` (`LAB_USER_DOMAIN_ROLES` in `setup-realms.sh`). Für diese erste Stufe reicht `admin`; die Asymmetrie wird erst in der zweiten Stufe sichtbar, wo der Selfservice-Exchange-Gate-Mapper `selfservice` im aktiven Mandanten aus token1 verlangt (siehe `SETUP.md`). Meldet sich per Passwort-Grant an |
 
 ## Wie die `aud` entsteht — der Kern
 
@@ -184,6 +184,8 @@ wird; entscheidend ist, dass er über beide Exchanges hinweg derselbe bleibt:
 }
 
 // token_dom - token-exchange, client gateway, audience=domain-1234 & scope=domain-1234
+// (resource_access seit der Gate-Haertung nur noch "admin" - lab-user traegt selfservice
+//  nicht auf domain-1234; Messung dazu in SETUP.md, Abschnitt "Ohne die Rolle selfservice")
 {
   "iss": "http://localhost:8080/realms/frontend",
   "aud": "domain-1234",
@@ -192,7 +194,7 @@ wird; entscheidend ist, dass er über beide Exchanges hinweg derselbe bleibt:
   "preferred_username": "lab-user",
   "domain": "domain-1234",
   "scope": "profile email domain-1234",
-  "resource_access": { "domain-1234": { "roles": ["admin", "selfservice"] } },
+  "resource_access": { "domain-1234": { "roles": ["admin"] } },
   "realm_access": null
 }
 ```
