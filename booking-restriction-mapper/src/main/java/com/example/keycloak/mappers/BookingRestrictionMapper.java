@@ -23,8 +23,9 @@ import java.util.Set;
  * Verengt resource_access im Access Token (token3, Domain B) auf die Dienste, die laut
  * scope-Claim der Token-Exchange-Assertion gebucht sind (Praefix "service:"). Fail-closed:
  * jeder Eintrag in resource_access, dessen Client nicht unter den gebuchten Diensten ist,
- * wird komplett entfernt. Schreibt zusaetzlich den tenant-Claim aus der Assertion als reinen
- * Audit-Claim nach token3 - aber nur, wenn nach dem Verengen mindestens ein Dienst uebrig
+ * wird komplett entfernt. Schreibt zusaetzlich den tenant-Claim aus der Assertion nach token3
+ * (mandantenbindend: die Backend-Dienste trennen ihre Daten danach, der Mapper selbst wertet
+ * ihn nicht aus) - aber nur, wenn nach dem Verengen mindestens ein Dienst uebrig
  * bleibt (sonst fail-closed auch beim tenant-Claim).
  *
  * Wirkt nur auf das Access Token - kein IDTokenMapper noetig.
@@ -94,7 +95,7 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
             }
         }
 
-        // tenant nur als Audit-Claim setzen, wenn nach dem Verengen ueberhaupt ein Dienst
+        // tenant nur setzen, wenn nach dem Verengen ueberhaupt ein Dienst
         // uebrig bleibt - sonst waere token3 "ohne Rollen, aber mit tenant" ein Widerspruch
         // zum Fail-closed-Verhalten.
         if (assertionDaten.tenant() != null && !token.getResourceAccess().isEmpty()) {

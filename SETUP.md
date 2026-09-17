@@ -29,7 +29,8 @@ docker compose up -d
 
 Vorher einmalig die drei Mapper-JARs bauen (Befehle im Abschnitt „Testablauf", Schritt 1) — ohne
 sie startet der Stack nicht. Das Provisionierungs-Skript legt beide Realms komplett an und gibt am
-Ende die vier curl-Aufrufe mit eingesetzten Werten aus. `check-setup.sh` prüft jeden Punkt einzeln und ist rein lesend.
+Ende die vier curl-Aufrufe mit eingesetzten Werten aus. `check-setup.sh` prüft jeden Punkt einzeln und ist rein lesend,
+`test-chain.sh` prüft anschließend das Verhalten der Kette (12 Fälle, ebenfalls rein lesend).
 
 ---
 
@@ -103,9 +104,10 @@ realm-weit, nicht client-genau. Enger wird sie über Client Policies (`jwt-claim
 
 ### 3. Rollen kommen nie aus dem Frontend
 
-Die Assertion transportiert Identität, keine Berechtigungen. Was der Aufrufer im Backend darf,
-entscheidet allein der verlinkte Backend-User — über seine Rollen, seine Gruppen und die
-**Default-Rollen des Realms**. Letztere sind die häufigste Erklärung für Einträge in
+Die Assertion transportiert Identität und zwei Behauptungen des Gateways (`tenant` und die
+gebuchten `service:*`-Scopes), aber keine Rollen. Welche Rollen der Aufrufer im Backend bekommt,
+entscheidet der verlinkte Backend-User — über seine Rollen, seine Gruppen und die
+**Default-Rollen des Realms** —, verengt durch Mapper 2 auf die gebuchten Dienste. Letztere sind die häufigste Erklärung für Einträge in
 `resource_access`, die man dem User nirgends zugewiesen hat; `check-setup.sh` gibt sie deshalb aus.
 
 ### 4. `Full scope allowed` hebelt die Zuschneidung aus

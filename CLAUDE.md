@@ -12,7 +12,7 @@
 
 ## 2. Projekt-Kontext
 
-Lernlabor für **Keycloak 26.7 Token Exchange V2 + JWT Authorization Grant** (Identity Chaining). kein App-Code, nur Docker Compose, 2 Bash-Skripte, Bruno-Collection, Doku.
+Lernlabor für **Keycloak 26.7 Token Exchange V2 + JWT Authorization Grant** (Identity Chaining). kein App-Code, nur Docker Compose, 3 Bash-Skripte, Bruno-Collection, Doku.
 
 - **Ziel:** Verständnis > Betrieb. `SETUP.md` ist Kernprodukt.
 - **Einlese-Reihenfolge:** `README.md` -> `SETUP.md` -> `setup-realms.sh` (Header) -> `check-setup.sh` -> `test-chain.sh`.

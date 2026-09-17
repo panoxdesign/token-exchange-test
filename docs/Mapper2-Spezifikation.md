@@ -67,8 +67,10 @@ Backend verengt darauf. Ein fehlerhaftes oder kompromittiertes Gateway fängt Ke
   (`getDecodedFormParameters().getFirst("assertion")`) und dekodiert sie als `JsonWebToken` — wie
   der jwt-bearer-Grant selbst. `scope` ist dort kein deklariertes Feld (nur in der Unterklasse
   `AccessToken`), landet aber über `@JsonAnySetter` in `otherClaims` — genau wie `tenant`/`domain`
-  bei den anderen beiden Mappern. Keine erneute Signaturprüfung nötig (der Grant validiert vor dem
-  Token-Bau). Beleg: [`Mapper2-Recherche.md`](Mapper2-Recherche.md).
+  bei den anderen beiden Mappern. Keine eigene Signaturprüfung (der Grant validiert die Assertion
+  über den IdP-JWKS vor dem Token-Bau; der Backend-Realm hat den Frontend-Schlüssel nicht lokal) —
+  anders als RTM und Gate, die Tokens des eigenen Realms seit der Härtung (Review L1) selbst über
+  `session.tokens().decode` prüfen. Mapper 2 prüft stattdessen `grant_type == jwt-bearer`. Beleg: [`Mapper2-Recherche.md`](Mapper2-Recherche.md).
 - **Priorität 100:** Mapper 2 läuft nach den Rollen-Mappern (Priorität 40), damit `resource_access`
   beim Verengen bereits befüllt ist. `transformAccessToken` wird überschrieben (sonst greift die
   Config-Flag-Falle wie bei den anderen Mappern).

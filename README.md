@@ -95,15 +95,16 @@ Admin-Konsolen: <http://localhost:8080> und <http://localhost:8181>, jeweils `ad
 
 ## Anpassen
 
-Beide Skripte lesen ihre Werte aus Umgebungsvariablen, die Defaults stehen im Kopf der Dateien:
+Alle drei Skripte lesen ihre Werte aus Umgebungsvariablen, die Defaults stehen im Kopf der Dateien:
 
 ```bash
 DOMAIN=domain-1234 ./setup-realms.sh
 FE=http://localhost:8080 BE=http://localhost:8181 ./check-setup.sh
 ```
 
-Wer die Ziel-Dienste ändern will, passt das Array `SERVICES` in beiden Skripten an
-(`name:rolle,rolle`).
+Wer die Ziel-Dienste ändern will, passt das Array `SERVICES` in `setup-realms.sh` und
+`check-setup.sh` an (`name:rolle,rolle`); `test-chain.sh` kennt die beiden Dienste samt erwarteten
+Rollen fest (`SVC_A`/`SVC_B`) und muss dann mit angepasst werden.
 
 ## Zurücksetzen
 
