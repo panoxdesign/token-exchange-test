@@ -36,7 +36,8 @@ Rolle `selfservice` trägt — `lab-user` hat sie nur auf `domain-5678`, aus `do
 Backend unerreichbar. Mapper 2 (`booking-restriction-mapper/`) verengt token3 im Backend auf die
 Dienste, die laut `scope`-Claim der Assertion tatsächlich gebucht sind — fail-closed ohne Treffer.
 Das Backend kennt dabei keine Mandanten mehr; welcher Mandant welchen Dienst gebucht hat, steht nur
-im Frontend/BFF (**[docs/buchungen.csv](docs/buchungen.csv)**, Zwischenlösung für dieses Lab). Alle
+im Frontend/BFF (**[docs/buchungen.csv](docs/buchungen.csv)**, später eine DB; bewusst nie in
+Keycloak — das Gateway/BFF setzt die Buchung durch, Keycloak signiert sie nur). Alle
 drei Mapper prüfen dabei den Grant-Typ selbst, RTM und Gate zusätzlich die Signatur des
 subject_token — ein fremder Grant am selben Client kann ihnen also keinen selbstgebauten Parameter
 unterschieben. Details und gemessene Fälle in
@@ -84,7 +85,7 @@ Admin-Konsolen: <http://localhost:8080> und <http://localhost:8181>, jeweils `ad
 | `requested-tenant-mapper/` | Custom Protocol Mapper 1: leitet den `tenant`-Claim in token2 aus dem `domain`-Claim des subject_token (token1) ab (Docker-Build) |
 | `selfservice-exchange-gate/` | Custom Protocol Mapper (Gate): setzt die Backend-`aud` in token2 nur, wenn token1 im aktiven Mandanten die Rolle `selfservice` trägt (Docker-Build) |
 | `booking-restriction-mapper/` | Custom Protocol Mapper 2: verengt token3 auf die im `scope`-Claim der Assertion gebuchten Dienste (Docker-Build) |
-| `docs/buchungen.csv` | Beispiel-Buchungsdaten (Mandant → Service), Zwischenlösung nur fürs Frontend/BFF |
+| `docs/buchungen.csv` | Beispiel-Buchungsdaten (Mandant → Service), Platzhalter für die spätere Buchungs-DB; liest nur das Frontend/BFF, nie Keycloak |
 | `docs/Mapper2-Spezifikation.md` | Spezifikation + gemessener Nachweis von Mapper 2 |
 | `docs/Mapper2-Recherche.md` | Quellcode-Belege (Keycloak 26.7.0) zur Machbarkeit von Mapper 2 |
 | `docs/keycloak-fallstricke.md` | Kurzliste der Stolperfallen, die real Zeit gekostet haben |

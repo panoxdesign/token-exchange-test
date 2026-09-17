@@ -457,6 +457,16 @@ Fälle und die Quellcode-Belege:
 [`docs/Mapper2-Recherche.md`](docs/Mapper2-Recherche.md). Werte oben gemessen (Keycloak 26.7.2,
 Stand dieses Setups).
 
+> **Wer die Buchung durchsetzt.** Die Buchungsquelle (heute [`docs/buchungen.csv`](docs/buchungen.csv),
+> später eine DB) liegt bewusst außerhalb von Keycloak; Keycloak prüft nur, dass die angeforderten
+> `service:*`-Scopes dem `gateway` zugewiesen sind, nicht, ob der Mandant den Dienst gebucht hat.
+> Enforcement Point der Buchung ist deshalb das **Gateway/BFF**: Keycloak signiert dessen
+> Entscheidung in token2, Mapper 2 verengt token3 auf das Behauptete — nicht mehr. Ein Fehler oder
+> eine Kompromittierung im Gateway gibt jedem Mandanten mit `selfservice` jeden Dienst. Daraus
+> folgen die Anforderungen an das Gateway: rein serverseitig, Secret geschützt, die Scope-Wahl
+> stammt ausschließlich aus der Buchungsquelle und nie aus User-Input, und jede
+> Buchungsentscheidung wird mit Mandant, User und Dienst geloggt.
+
 ### Gegenproben
 
 Zwei Fehlschläge, die zeigen, dass die Kette hält:

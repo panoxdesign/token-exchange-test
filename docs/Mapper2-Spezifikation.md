@@ -10,11 +10,15 @@ Modul-`README` in [`../booking-restriction-mapper/`](../booking-restriction-mapp
 Vorher trug der Backend-Realm das Mandanten-Wissen selbst (Gruppen `/domain-5678`, `/domain-1234`).
 Jeder neue Mandant im Frontend musste im Backend nachgezogen werden (Gruppe, Gruppenrollen,
 Mitgliedschaft) — eine Synchronisation, die entfallen soll. Künftig kennt das Backend **keine
-Mandanten** mehr. Die Buchung „welcher Mandant hat welchen Dienst gebucht" liegt in einer CSV
-([`buchungen.csv`](buchungen.csv)), die **nur das Frontend/BFF** liest (in diesem Lab manuell
-simuliert). Die Buchung reist als signierte `service:*`-Scopes im `scope`-Claim der Assertion
-(token2); Mapper 2 erzwingt im Backend, dass `resource_access` in token3 nur die dort gebuchten
-Dienste enthält.
+Mandanten** mehr. Die Buchung „welcher Mandant hat welchen Dienst gebucht" liegt außerhalb von
+Keycloak — heute in einer CSV ([`buchungen.csv`](buchungen.csv)), perspektivisch in einer DB —
+und wird **nur vom Frontend/BFF** gelesen (in diesem Lab manuell simuliert). Das ist eine
+Entscheidung, keine Zwischenlösung: Buchungsstände sind Geschäftsdaten und gehören nicht in einen
+Token-Aussteller. Die Buchung reist als signierte `service:*`-Scopes im `scope`-Claim der Assertion
+(token2). Mapper 2 erzwingt im Backend damit **nicht die Buchung selbst**, sondern dass
+`resource_access` in token3 nicht mehr enthält, als das Gateway laut Buchungsquelle behauptet hat.
+Enforcement Point der Buchung ist das Gateway/BFF; Keycloak signiert dessen Entscheidung und das
+Backend verengt darauf. Ein fehlerhaftes oder kompromittiertes Gateway fängt Keycloak nicht auf.
 
 ## 2. Akteure
 

@@ -11,7 +11,7 @@ Abgleich der sicherheitskritischen Annahmen mit dem Keycloak-Quellcode (Tag 26.7
 | Punkt | Stand |
 |---|---|
 | L1 | **umgesetzt.** RTM und Gate prüfen `grant_type`, Signatur (`session.tokens().decode`) und `domain ∈ aud` selbst; Mapper 2 prüft `grant_type`. `check-setup.sh` meldet Scope-Drift und zusätzliche Grants. Gegenbeweis gemessen: Scope am Portal plus gefälschter `subject_token` im Password Grant ergibt weder Backend-`aud` noch `tenant`. |
-| L2 | offen (nur Doku-Präzisierung, siehe Abschnitt 4.2). |
+| L2 | **umgesetzt** (Doku: Gateway/BFF als Enforcement Point der Buchung, Buchungsquelle bewusst außerhalb von Keycloak, Mapper 2 verengt nur auf das Behauptete). |
 | L3 | **umgesetzt** (Doku: `tenant` als mandantenbindender Claim). |
 | L4 | **umgesetzt** (Code: `domain ∈ aud` in Gate und RTM; Doku korrigiert). |
 | L5 | offen, erst bei zweitem Backend-Requester relevant. |
