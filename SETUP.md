@@ -24,11 +24,13 @@ Das ist der Kern: **ein Exchange, zwei Zuschnitte.**
 docker compose up -d
 ./setup-realms.sh --recreate
 ./check-setup.sh
+./test-chain.sh                # Verhaltenstest der Kette, alle 12 Faelle
 ```
 
 Vorher einmalig die drei Mapper-JARs bauen (Befehle im Abschnitt „Testablauf", Schritt 1) — ohne
 sie startet der Stack nicht. Das Provisionierungs-Skript legt beide Realms komplett an und gibt am
-Ende die vier curl-Aufrufe mit eingesetzten Werten aus. `check-setup.sh` prüft jeden Punkt einzeln und ist rein lesend.
+Ende die vier curl-Aufrufe mit eingesetzten Werten aus. `check-setup.sh` prüft jeden Punkt einzeln und ist rein lesend,
+`test-chain.sh` prüft anschließend das Verhalten der Kette (12 Fälle, ebenfalls rein lesend).
 
 ---
 
@@ -102,9 +104,10 @@ realm-weit, nicht client-genau. Enger wird sie über Client Policies (`jwt-claim
 
 ### 3. Rollen kommen nie aus dem Frontend
 
-Die Assertion transportiert Identität, keine Berechtigungen. Was der Aufrufer im Backend darf,
-entscheidet allein der verlinkte Backend-User — über seine Rollen, seine Gruppen und die
-**Default-Rollen des Realms**. Letztere sind die häufigste Erklärung für Einträge in
+Die Assertion transportiert Identität und zwei Behauptungen des Gateways (`tenant` und die
+gebuchten `service:*`-Scopes), aber keine Rollen. Welche Rollen der Aufrufer im Backend bekommt,
+entscheidet der verlinkte Backend-User — über seine Rollen, seine Gruppen und die
+**Default-Rollen des Realms** —, verengt durch Mapper 2 auf die gebuchten Dienste. Letztere sind die häufigste Erklärung für Einträge in
 `resource_access`, die man dem User nirgends zugewiesen hat; `check-setup.sh` gibt sie deshalb aus.
 
 ### 4. `Full scope allowed` hebelt die Zuschneidung aus
@@ -286,7 +289,7 @@ die `aud` hier über Rollen statt über einen Audience-Mapper entsteht.
 | Objekt | Zweck |
 |---|---|
 | Client `http://localhost:8181/realms/Backend-Microservices` | existiert nur als Audience-Ziel, **keine eigene Rolle**. Der Audience-Mapper/Gate-Mapper kann nur die ID eines *existierenden* Clients in `aud` schreiben, und `aud` muss der Issuer des Empfängers sein — daher der URL-förmige Name |
-| Client Scope `access-backend` | Mapper `RTM` (`oidc-requested-tenant-mapper`, schreibt `tenant` aus `token1.domain`) **und** Mapper `Selfservice Exchange Gate` (`oidc-selfservice-exchange-gate`): setzt `aud` auf die Backend-Issuer-URL nur, wenn `token1.resource_access[token1.domain]` die Rolle `selfservice` enthält — liest also den **aktiven** Mandanten aus token1, nicht die statischen Rollen des Users. Der Schalter, der token1 zu token2 macht |
+| Client Scope `access-backend` | Mapper `RTM` (`oidc-requested-tenant-mapper`, schreibt den mandantenbindenden `tenant`-Claim aus `token1.domain`) **und** Mapper `Selfservice Exchange Gate` (`oidc-selfservice-exchange-gate`): setzt `aud` auf die Backend-Issuer-URL nur, wenn `token1.resource_access[token1.domain]` die Rolle `selfservice` enthält — liest also den **aktiven** Mandanten aus token1, nicht die statischen Rollen des Users. Der Schalter, der token1 zu token2 macht |
 | Client `domain-5678` | confidential, reine Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice`. **Kein** Service Account, **kein** Token Exchange |
 | Client `domain-1234` | zweite Ziel-Domain des internen Exchange, Rollen `admin`/`selfservice` |
 | Client `gateway` | Requester des internen **und** externen Exchange. **Standard token exchange** On, **Full scope allowed** Off, Scope `roles` als Default, `domain-5678`/`domain-1234`/`access-backend`/`service:e-rechnung`/`service:fahrtkostenerstattung` als **Optional** |
@@ -397,10 +400,17 @@ So sehen die vier Tokens aus (gemessen, gekürzt — siehe die Bruno-Requests `0
   "tenant": "domain-5678" }
 ```
 
-`token2.tenant` bleibt stehen (Mapper 1/RTM setzt ihn weiterhin, reiner Audit-Claim) — Mapper 2
-kopiert ihn seit dieser Ergänzung als Audit-Claim nach `token3`, aber fail-closed-konsistent: nur
-wenn nach dem Verengen mindestens ein Dienst in `resource_access` übrig bleibt. Zur Autorisierung
-selbst trägt der Claim nichts bei — die Zuschneidung läuft allein über `resource_access`.
+`token2.tenant` bleibt stehen (Mapper 1/RTM setzt ihn weiterhin) — Mapper 2 kopiert ihn seit dieser
+Ergänzung nach `token3`, aber fail-closed-konsistent: nur wenn nach dem Verengen mindestens ein
+Dienst in `resource_access` übrig bleibt. Zur Zuschneidung selbst trägt der Claim nichts bei — die
+läuft allein über `resource_access`.
+
+`tenant` ist deshalb kein reiner Audit-Claim, sondern der einzige Mandanten-Hinweis in token3: Das
+Backend kennt keine Mandanten mehr, und der Backend-User trägt für alle Mandanten dieselben Rollen
+— außer `tenant` gibt es nichts, woran ein Backend-Dienst Daten trennen könnte. Wer
+mandantengetrennte Daten hält, **muss** deshalb nach `tenant` filtern und Tokens ohne diesen Claim
+ablehnen. Seine Integrität hängt an RTM (leitet ihn aus `token1.domain` ab) und am Gate (lässt den
+externen Exchange nur mit gültigem `domain` + Rolle zu) — Mapper 2 reicht ihn nur durch.
 
 `sub` in token2 ist der **Frontend-lab-user**, kein Service-Account. Der Claim `tenant`
 (RTM-Mapper) trägt den `domain`-Claim aus **token1 selbst** (dem subject_token des Exchange) —
@@ -408,22 +418,32 @@ unabhängig vom `audience=`-Parameter, der nur die `aud` filtert, und ohne einen
 wählbaren Request-Parameter.
 
 > **Warum das sicher ist.** `domain` in token1 stammt aus einem Hardcoded-Claim-Mapper auf dem
-> Domain-Scope (`domain-5678`/`domain-1234`), der wiederum über die echten Rollen des Users
-> gated ist: `gateway` hat `Full scope allowed` Off, also bekommt token1 den Scope `domain-5678`
-> nur, wenn er angefordert wird **und** der User Rollen in `domain-5678` hat. Der Exchange
-> validiert token1 als subject_token, bevor Mapper laufen — RTM liest daraus nur, was der Exchange
-> bereits geprüft hat. Ein zusätzlicher `requested_tenant=`-Parameter existiert seit dieser Härtung
+> Domain-Scope (`domain-5678`/`domain-1234`) — der feuert, sobald der Scope aktiv ist, unabhängig
+> von Rollen: ohne `audience=` bekäme auch ein User ohne jede Rolle auf einer Domain ein token1 mit
+> `domain=<Domain>`, aber ohne `aud` und ohne `resource_access`. Gated ist deshalb nicht `domain`
+> selbst, sondern die Kombination `domain` + `resource_access[domain]` + `domain ∈ aud` — geprüft
+> erst im Gate-Mapper (und in RTM). `gateway` hat `Full scope allowed` Off, also bekommt token1 den
+> Scope `domain-5678` überhaupt nur, wenn er angefordert wird **und** der User Rollen in
+> `domain-5678` hat. Ein zusätzlicher `requested_tenant=`-Parameter existiert seit dieser Härtung
 > nicht mehr: Wer ihn trotzdem mitschickt, bewirkt nichts — der `tenant`-Claim in token2 folgt
 > ausschließlich `token1.domain`. Siehe Troubleshooting unten für den gemessenen Beleg.
 >
-> **Vorbehalt:** Dass die Signaturvalidierung des subject_token *vor* dem Mapper-Lauf passiert, ist
-> beobachtetes internes Verhalten von Keycloak 26.7 — kein dokumentierter API-Vertrag. Für die
-> gepinnte Version verlässlich (der praktische Beleg dafür sind der Positiv- und der
-> Fail-closed-Test unten), bei einem Major-Upgrade aber neu zu prüfen.
+> RTM und Gate hängen dabei nicht mehr davon ab, dass Keycloak den subject_token vor dem Mapper-Lauf
+> validiert: Beide prüfen `grant_type` (nur Token Exchange), die Signatur selbst über
+> `session.tokens().decode(subjectToken, AccessToken.class)` (ungültige Signatur → `null` →
+> fail-closed) und verlangen `domain ∈ aud` von token1. `StandardTokenExchangeProvider` ruft in
+> 26.7.2 zwar tatsächlich `AuthenticationManager.verifyIdentityToken` vor dem Token-Bau auf, das ist
+> aber kein dokumentierter API-Vertrag — die Kette hängt seit dieser Härtung nicht mehr daran.
+> Gemessener Gegenbeweis: Hängt man `access-backend` fälschlich an `self-service-portal` und schickt
+> einen Password Grant mit `scope=access-backend` plus einem selbstgebauten, unsignierten
+> `subject_token` (`domain=domain-1234`, `resource_access.domain-1234.roles=[selfservice]`), kommt
+> ein Token ohne Backend-`aud` und ohne `tenant` zurück — dasselbe am `gateway` mit eingeschaltetem
+> Direct Access Grant. `check-setup.sh` meldet beide Fehlkonfigurationen als FEHLT.
 
 In `token3` ist `sub` der **Backend-`lab-user`** (verknüpft mit dem Frontend-lab-user, eigene UUID,
-bei jedem Neuaufbau anders). **Das Backend kennt dabei keinen Mandanten** — `token2.tenant` ist ein
-reiner Audit-Claim, den Mapper 2 nicht zur Autorisierung auswertet. Stattdessen verengt Mapper 2
+bei jedem Neuaufbau anders). **Das Backend kennt dabei keinen Mandanten** — `token2.tenant` ist der
+mandantenbindende Claim, den Mapper 2 zwar durchreicht, aber nicht zur Autorisierung auswertet.
+Stattdessen verengt Mapper 2
 (`oidc-booking-restriction-mapper`, Domain B) `resource_access` auf die Dienste, die laut
 `scope`-Claim der Assertion gebucht sind (Präfix `service:`): Er liest `scope` aus der Assertion,
 bildet daraus die Menge gebuchter Dienste und entfernt jeden `resource_access`-Eintrag, dessen
@@ -432,12 +452,22 @@ der Request fordert `scope=e-rechnung` → die direkten Rollen des Backend-Users
 (`reader`, `writer`) bleiben stehen; forderte derselbe Request stattdessen
 `scope=fahrtkostenerstattung`, obwohl nur `e-rechnung` gebucht ist, bliebe `resource_access` leer
 (siehe Gegenproben unten). Bleibt nach dem Verengen mindestens ein Dienst übrig, kopiert Mapper 2
-zusätzlich `tenant` aus der Assertion nach `token3` (reiner Audit-Claim); bleibt `resource_access`
+zusätzlich `tenant` aus der Assertion nach `token3` (mandantenbindender Claim); bleibt `resource_access`
 leer, bleibt `token3` fail-closed-konsistent auch ohne `tenant`-Claim. Details, alle gemessenen
 Fälle und die Quellcode-Belege:
 [`docs/Mapper2-Spezifikation.md`](docs/Mapper2-Spezifikation.md) und
 [`docs/Mapper2-Recherche.md`](docs/Mapper2-Recherche.md). Werte oben gemessen (Keycloak 26.7.2,
 Stand dieses Setups).
+
+> **Wer die Buchung durchsetzt.** Die Buchungsquelle (heute [`docs/buchungen.csv`](docs/buchungen.csv),
+> später eine DB) liegt bewusst außerhalb von Keycloak; Keycloak prüft nur, dass die angeforderten
+> `service:*`-Scopes dem `gateway` zugewiesen sind, nicht, ob der Mandant den Dienst gebucht hat.
+> Enforcement Point der Buchung ist deshalb das **Gateway/BFF**: Keycloak signiert dessen
+> Entscheidung in token2, Mapper 2 verengt token3 auf das Behauptete — nicht mehr. Ein Fehler oder
+> eine Kompromittierung im Gateway gibt jedem Mandanten mit `selfservice` jeden Dienst. Daraus
+> folgen die Anforderungen an das Gateway: rein serverseitig, Secret geschützt, die Scope-Wahl
+> stammt ausschließlich aus der Buchungsquelle und nie aus User-Input, und jede
+> Buchungsentscheidung wird mit Mandant, User und Dienst geloggt.
 
 ### Gegenproben
 
@@ -465,6 +495,8 @@ dritte, dass Mapper 2 tatsächlich durchsetzt statt nur zu vertrauen: der Backen
 für `fahrtkostenerstattung` und der Scope ist dem Requester zugewiesen — ohne Mapper 2 käme hier ein
 normales Token zurück (belegt in `docs/Mapper2-Recherche.md`).
 
+Alle Gegenproben, plus weitere, laufen automatisiert in `./test-chain.sh`.
+
 ### Der geschlossene Angriffsweg: `requested_tenant`-Spoofing
 
 Vor dieser Härtung transportierte der RTM-Mapper den Form-Parameter `requested_tenant` unverändert
@@ -489,11 +521,11 @@ wird von der Server-Implementierung gar nicht mehr gelesen; der Claim folgt auss
 
 Seit der Umstellung auf Buchungs-Scopes (Mapper 2, s. u.) hat dieser Claim ohnehin **keine**
 Auswirkung mehr auf `resource_access` in token3: das hängt nur noch an den gebuchten
-`service:*`-Scopes. Mapper 2 liest `tenant` zwar (und kopiert ihn fail-closed-konsistent als
-Audit-Claim nach token3), wertet ihn aber nicht zur Autorisierung aus. `token2.tenant` bleibt ein
-reiner Audit-Claim — die ursprüngliche Spoofing-Gefahr (fremder Mandant → fremde Rollen) existiert
-im Backend nicht mehr, weil das Backend
-seit diesem Umbau gar keine Mandanten mehr kennt.
+`service:*`-Scopes. Mapper 2 liest `tenant` zwar (und kopiert ihn fail-closed-konsistent nach
+token3), wertet ihn aber nicht zur Autorisierung aus — die ursprüngliche Spoofing-Gefahr (fremder
+Mandant → fremde Rollen) existiert im Backend nicht mehr, weil das Backend seit diesem Umbau gar
+keine Mandanten mehr kennt. `token2.tenant` bleibt trotzdem der mandantenbindende Claim, auf den
+Backend-Dienste zur Datentrennung angewiesen sind (s. o.) — nur eben nicht über `resource_access`.
 
 ### Ohne die Rolle `selfservice` im aktiven Mandanten: der externe Exchange bleibt zu
 
@@ -606,6 +638,11 @@ Rolle `selfservice` im aktiven Mandanten").
 `domain-1234 selfservice`) und wiederhole Schritt 4 — jetzt gelingt auch der externe Exchange aus
 `domain-1234`. Zum Zurücksetzen: `./setup-realms.sh --recreate`.
 
+**6. Regressionstest.** `./test-chain.sh` läuft die Positivkette und alle Gegenproben automatisch
+durch — inklusive der Schritte 3 und 4 dieses Ablaufs, dem `requested_tenant`-Spoofing, Token-Reuse,
+einem gefälschten `subject_token` und zwei gleichzeitigen Domain-Scopes —, insgesamt 12 Fälle, rein
+lesend, Exit 1 bei Abweichung. Bei jedem Keycloak-Upgrade ausführen.
+
 ---
 
 ## Troubleshooting
@@ -620,6 +657,7 @@ docker compose logs -f backend-keycloak
 |---|---|
 | `unauthorized_client` in Schritt 2 | *Standard token exchange* am Frontend-Client aus |
 | token2 ohne `aud` (bei `audience=` weggelassen) | `scope=access-backend` vergessen, Scope nicht als *Optional* zugewiesen, oder token1 wurde für einen Mandanten ausgestellt, in dem `lab-user` die Rolle `selfservice` nicht hat |
+| token2 ohne `tenant`/`aud`, obwohl token1 einen `domain`-Claim hat | `domain` steht nicht in `aud` von token1 (z. B. zwei Domain-Scopes gleichzeitig angefordert und `audience=` auf die andere Domain gesetzt) — RTM und Gate verlangen `domain ∈ aud`, oder der Aufruf lief nicht als Token Exchange |
 | `invalid_request: Requested audience not available: <backend-issuer-url>` in Schritt 02 | derselbe Grund wie oben, aber mit explizitem `audience=` im Request (wie in der Kette oben) — `restrictRequestedAudience` bricht dann sofort ab statt still auf `aud` zu verzichten. Meist: token1 (subject_token) stammt aus einem Mandanten ohne `selfservice`, z.B. `domain-1234` (s. Abschnitt oben) — der Gate-Mapper liest das aus token1, nicht aus einer statischen User-Rolle |
 | `No Identity Provider for provided issuer` | `iss` ≠ `issuer` im IdP — meist eine localhost/Container-Verwechslung |
 | Timeout in Schritt 3 | `jwksUrl` zeigt auf `localhost` statt auf `frontend-keycloak` |
@@ -631,7 +669,7 @@ docker compose logs -f backend-keycloak
 | `invalid_scope` | der Scope existiert nicht oder ist dem Requester nicht zugewiesen |
 | zu viele Rollen in token3 | **Full scope allowed** ist On, oder die Rollen stecken in den Default-Rollen des Realms |
 | `resource_access` in token3 leer | Mapper 2 hat fail-closed: der in Schritt 03 angeforderte `scope=` ist nicht als `service:<scope>` im `scope`-Claim der Assertion gebucht (erwartetes Verhalten, s. Gegenproben und Request `03c`). Fail-closed-konsistent trägt token3 dann auch **keinen** `tenant`-Claim |
-| `requested_tenant=…` im Request 02 ändert nichts an `token2.tenant` | erwartetes Verhalten seit der Härtung — RTM liest `tenant` ausschließlich aus `token1.domain`, ein Request-Parameter wird nicht mehr ausgewertet |
+| `requested_tenant=…` im Request 02 ändert nichts an `token2.tenant` | erwartetes Verhalten seit der Härtung — RTM liest den mandantenbindenden `tenant` ausschließlich aus `token1.domain`, ein Request-Parameter wird nicht mehr ausgewertet |
 
 ---
 

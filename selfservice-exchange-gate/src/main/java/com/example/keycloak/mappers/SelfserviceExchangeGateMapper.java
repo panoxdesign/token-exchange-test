@@ -1,7 +1,6 @@
 package com.example.keycloak.mappers;
 
-import org.keycloak.jose.jws.JWSInput;
-import org.keycloak.jose.jws.JWSInputException;
+import org.keycloak.OAuth2Constants;
 import org.keycloak.models.ClientSessionContext;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ProtocolMapperModel;
@@ -12,6 +11,7 @@ import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.representations.AccessToken;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -33,9 +33,10 @@ import java.util.List;
  * setzt er sie nicht, bleibt aud leer und Schritt 02 scheitert hart mit "invalid_request:
  * Requested audience not available" (kein token2, Schritt 03 ist damit unerreichbar).
  *
- * Fail-closed: fehlt subject_token, domain-Claim, resource_access des aktiven Mandanten oder die
- * Rolle darin, wird NICHTS hinzugefuegt - lieber ein scheiternder Exchange als eine faelschlich
- * gewaehrte Audience.
+ * Fail-closed: fehlt subject_token, ist seine Signatur ungueltig, laeuft kein
+ * Token-Exchange-Grant, fehlt domain-Claim, steht domain nicht in der aud von token1, fehlt
+ * resource_access des aktiven Mandanten oder die Rolle darin, wird NICHTS hinzugefuegt - lieber
+ * ein scheiternder Exchange als eine faelschlich gewaehrte Audience.
  *
  * Nur auf dem Client-Scope "access-backend" registrieren, damit der Mapper ausschliesslich bei
  * diesem einen Exchange-Schritt greift.
@@ -126,6 +127,14 @@ public class SelfserviceExchangeGateMapper extends AbstractOIDCProtocolMapper
         }
         String domain = domainClaim.toString();
 
+        // domain muss in der aud von token1 stehen - sonst ist bei zwei gleichzeitig
+        // angeforderten Domain-Scopes unklar, fuer welche Domain token1 wirklich ausgestellt
+        // wurde (siehe Review L4). Fail-closed: ohne Treffer nichts hinzufuegen.
+        String[] aud = subjectToken.getAudience();
+        if (aud == null || !Arrays.asList(aud).contains(domain)) {
+            return token;
+        }
+
         AccessToken.Access acc = subjectToken.getResourceAccess(domain);
         if (acc != null && acc.getRoles() != null && acc.getRoles().contains(requiredRole)) {
             token.addAudience(audienceClient);
@@ -134,10 +143,11 @@ public class SelfserviceExchangeGateMapper extends AbstractOIDCProtocolMapper
         return token;
     }
 
-    // Liest den subject_token direkt aus den Form-Parametern des Requests und dekodiert ihn als
-    // AccessToken (nicht nur JsonWebToken - resource_access ist nur dort deklariert). Keine
-    // erneute Signaturpruefung noetig: der Exchange hat token1 bereits validiert, bevor Mapper
-    // laufen - dasselbe Muster wie RequestedTenantMapper.leseDomainAusSubjectToken().
+    // Liest den subject_token direkt aus den Form-Parametern des Requests - aber erst nach
+    // Pruefung von Grant-Type und Signatur (siehe Klassen-Javadoc), statt dem Parameter blind
+    // zu vertrauen. Dekodiert wird als AccessToken (nicht nur JsonWebToken - resource_access
+    // ist nur dort deklariert), dasselbe Muster wie
+    // RequestedTenantMapper.leseDomainAusSubjectToken().
     private AccessToken leseSubjectToken(KeycloakSession session) {
         if (session.getContext() == null || session.getContext().getHttpRequest() == null) {
             return null;
@@ -148,16 +158,15 @@ public class SelfserviceExchangeGateMapper extends AbstractOIDCProtocolMapper
             return null;
         }
 
+        if (!OAuth2Constants.TOKEN_EXCHANGE_GRANT_TYPE.equals(formParams.getFirst(OAuth2Constants.GRANT_TYPE))) {
+            return null;
+        }
+
         String subjectToken = formParams.getFirst(SUBJECT_TOKEN_PARAM);
         if (subjectToken == null) {
             return null;
         }
 
-        try {
-            JWSInput jws = new JWSInput(subjectToken);
-            return jws.readJsonContent(AccessToken.class);
-        } catch (JWSInputException e) {
-            return null;
-        }
+        return session.tokens().decode(subjectToken, AccessToken.class);
     }
 }

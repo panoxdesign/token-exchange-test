@@ -51,6 +51,11 @@ dekodiert sie selbst.**
   Token-Bau passiert erst danach. Wenn Mapper 2 läuft, ist die Assertion also bereits geprüft — er
   muss sie nur noch dekodieren, nicht erneut verifizieren.
 
+> **Stand nach dem Sicherheits-Review (L1):** Mapper 1 (RTM) und der Gate-Mapper prüfen inzwischen
+> `grant_type` und die Signatur des subject_token selbst (`session.tokens().decode`); Mapper 2 prüft
+> `grant_type == jwt-bearer`. Brücke A als Lesepfad bleibt unverändert, siehe
+> [`Review-Ansatz-Sicherheit.md`](Review-Ansatz-Sicherheit.md).
+
 ## Frage 3 — Steht `scope` beim Dekodieren als `JsonWebToken` überhaupt zur Verfügung?
 
 **Ja, über `otherClaims` — kein Sonderfall.**

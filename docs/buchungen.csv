@@ -1,5 +1,6 @@
-# Zwischenloesung: Beispiel-Buchungsdaten fuer dieses Lernlabor. Kein Code liest diese
-# Datei - sie steht nur fuer das Frontend/BFF, das hier manuell simuliert wird. In der
+# Beispiel-Buchungsdaten fuer dieses Lernlabor, Platzhalter fuer die spaetere Buchungs-DB.
+# Kein Code liest diese Datei, Keycloak schon gar nicht - sie steht nur fuer das
+# Frontend/BFF, das hier manuell simuliert wird und die Buchung durchsetzt. In der
 # Kette entscheidet sie, welche service:*-Scopes beim externen Exchange (Schritt 02)
 # angefordert werden, siehe SETUP.md.
 Mandant,Service

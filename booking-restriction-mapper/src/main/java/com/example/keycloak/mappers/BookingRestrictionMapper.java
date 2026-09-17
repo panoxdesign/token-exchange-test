@@ -1,5 +1,6 @@
 package com.example.keycloak.mappers;
 
+import org.keycloak.OAuth2Constants;
 import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.jose.jws.JWSInputException;
 import org.keycloak.models.ClientSessionContext;
@@ -22,8 +23,9 @@ import java.util.Set;
  * Verengt resource_access im Access Token (token3, Domain B) auf die Dienste, die laut
  * scope-Claim der Token-Exchange-Assertion gebucht sind (Praefix "service:"). Fail-closed:
  * jeder Eintrag in resource_access, dessen Client nicht unter den gebuchten Diensten ist,
- * wird komplett entfernt. Schreibt zusaetzlich den tenant-Claim aus der Assertion als reinen
- * Audit-Claim nach token3 - aber nur, wenn nach dem Verengen mindestens ein Dienst uebrig
+ * wird komplett entfernt. Schreibt zusaetzlich den tenant-Claim aus der Assertion nach token3
+ * (mandantenbindend: die Backend-Dienste trennen ihre Daten danach, der Mapper selbst wertet
+ * ihn nicht aus) - aber nur, wenn nach dem Verengen mindestens ein Dienst uebrig
  * bleibt (sonst fail-closed auch beim tenant-Claim).
  *
  * Wirkt nur auf das Access Token - kein IDTokenMapper noetig.
@@ -93,7 +95,7 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
             }
         }
 
-        // tenant nur als Audit-Claim setzen, wenn nach dem Verengen ueberhaupt ein Dienst
+        // tenant nur setzen, wenn nach dem Verengen ueberhaupt ein Dienst
         // uebrig bleibt - sonst waere token3 "ohne Rollen, aber mit tenant" ein Widerspruch
         // zum Fail-closed-Verhalten.
         if (assertionDaten.tenant() != null && !token.getResourceAccess().isEmpty()) {
@@ -109,8 +111,12 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
 
     // Bruecke A: liest die Assertion direkt aus den Form-Parametern des Requests (dieselbe
     // Quelle, aus der auch der jwt-bearer-Grant sie liest) und dekodiert sie wie der Grant
-    // selbst. Keine erneute Signaturpruefung noetig, der Grant hat die Assertion vor dem
-    // Token-Bau schon validiert.
+    // selbst. Neu: grant_type muss jwt-bearer sein, sonst koennte ein fremder Grant einen
+    // selbstgebauten assertion-Parameter unterschieben. Die JWSInput-Dekodierung ohne erneute
+    // Signaturpruefung bleibt aber bewusst bestehen (anders als bei RTM/Gate): die Assertion
+    // stammt vom fremden Frontend-Realm, dessen Schluessel der Backend-Realm nicht lokal hat -
+    // session.tokens().decode(...) kann hier nicht pruefen. Der jwt-bearer-Grant hat die
+    // Signatur ueber den IdP-JWKS bereits vor dem Token-Bau geprueft.
     //
     // Dekodiert wird als JsonWebToken, nicht als AccessToken: "scope" ist dort kein
     // deklariertes Feld (das liegt nur in AccessToken), sondern landet ueber @JsonAnySetter
@@ -122,6 +128,10 @@ public class BookingRestrictionMapper extends AbstractOIDCProtocolMapper
 
         var formParams = session.getContext().getHttpRequest().getDecodedFormParameters();
         if (formParams == null) {
+            return new AssertionDaten(Collections.emptySet(), null);
+        }
+
+        if (!OAuth2Constants.JWT_AUTHORIZATION_GRANT.equals(formParams.getFirst(OAuth2Constants.GRANT_TYPE))) {
             return new AssertionDaten(Collections.emptySet(), null);
         }
 

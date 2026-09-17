@@ -703,7 +703,8 @@ fi
 # "hat dieser User ueberhaupt Rollen fuer diesen Dienst". Welcher Mandant welchen Dienst
 # gebucht hat, weiss allein das Frontend/BFF (docs/buchungen.csv) und wird ueber die
 # service:*-Scopes im scope-Claim der Assertion transportiert; Mapper 2
-# (oidc-booking-restriction-mapper) erzwingt das beim Bau von token3.
+# (oidc-booking-restriction-mapper) verengt token3 beim Bau auf das, was die
+# Assertion behauptet - die Buchung selbst setzt das Gateway/BFF durch.
 for entry in $SCOPE_IDS; do
   SVC="${entry%%:*}"; rest="${entry#*:}"; SVC_UUID="${rest#*:}"
   assign_client_roles_to_user "$BE" "$BE_TOK" "$BE_REALM" "$BE_USER_ID" "$SVC_UUID" "$SVC"

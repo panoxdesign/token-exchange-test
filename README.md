@@ -29,16 +29,20 @@ auch zeigen, dass Token Exchange V2 ausschließlich realm-intern arbeitet. Detai
 **[docs/Interner-Token-Exchange.md](docs/Interner-Token-Exchange.md)**.
 
 Drei **Custom Protocol Mapper** schärfen die cross-realm Kette: Mapper 1
-(`requested-tenant-mapper/`) trägt den aktiven Mandanten aus token1 als `tenant`-Claim (Audit) in
-token2. Der **Selfservice Exchange Gate** (`selfservice-exchange-gate/`) lässt den externen Exchange
-(token1 → token2) nur zu, wenn der User im *aktiven* Mandanten aus token1 die Rolle `selfservice`
-trägt — `lab-user` hat sie nur auf `domain-5678`, aus `domain-1234` bleibt das Backend
-unerreichbar. Mapper 2 (`booking-restriction-mapper/`) verengt token3 im Backend auf die Dienste, die
-laut `scope`-Claim der Assertion tatsächlich gebucht sind — fail-closed ohne Treffer. Das Backend
-kennt dabei keine Mandanten mehr; welcher Mandant welchen Dienst gebucht hat, steht nur im
-Frontend/BFF (**[docs/buchungen.csv](docs/buchungen.csv)**, Zwischenlösung für dieses Lab). Details
-und gemessene Fälle in **[docs/Mapper2-Spezifikation.md](docs/Mapper2-Spezifikation.md)**, der
-Gate-Testablauf in SETUP.md.
+(`requested-tenant-mapper/`) trägt den aktiven Mandanten aus token1 als mandantenbindenden
+`tenant`-Claim in token2. Der **Selfservice Exchange Gate** (`selfservice-exchange-gate/`) lässt den
+externen Exchange (token1 → token2) nur zu, wenn der User im *aktiven* Mandanten aus token1 die
+Rolle `selfservice` trägt — `lab-user` hat sie nur auf `domain-5678`, aus `domain-1234` bleibt das
+Backend unerreichbar. Mapper 2 (`booking-restriction-mapper/`) verengt token3 im Backend auf die
+Dienste, die laut `scope`-Claim der Assertion tatsächlich gebucht sind — fail-closed ohne Treffer.
+Das Backend kennt dabei keine Mandanten mehr; welcher Mandant welchen Dienst gebucht hat, steht nur
+im Frontend/BFF (**[docs/buchungen.csv](docs/buchungen.csv)**, später eine DB; bewusst nie in
+Keycloak — das Gateway/BFF setzt die Buchung durch, Keycloak signiert sie nur). Alle
+drei Mapper prüfen dabei den Grant-Typ selbst, RTM und Gate zusätzlich die Signatur des
+subject_token — ein fremder Grant am selben Client kann ihnen also keinen selbstgebauten Parameter
+unterschieben. Details und gemessene Fälle in
+**[docs/Mapper2-Spezifikation.md](docs/Mapper2-Spezifikation.md)**, der Gate-Testablauf in
+SETUP.md, ein automatisierter Regressionstest der ganzen Kette in `test-chain.sh`.
 
 ## Voraussetzungen
 
@@ -57,6 +61,7 @@ docker build --output type=local,dest=./selfservice-exchange-gate/target   ./sel
 docker compose up -d      # beide Keycloaks + je eine Postgres, ~30 s bis erreichbar
 ./setup-realms.sh --recreate
 ./check-setup.sh
+./test-chain.sh           # Verhaltens-Regressionstest der Kette, 12 Faelle
 ```
 
 Die JARs werden per Volume in die Keycloaks gemountet und liegen nicht im Git — ohne sie startet
@@ -74,12 +79,13 @@ Admin-Konsolen: <http://localhost:8080> und <http://localhost:8181>, jeweils `ad
 | `docker-compose.yaml` | zwei Keycloak 26.7.2 auf je einer Postgres 18. `KC_HOSTNAME` fixiert die Issuer |
 | `setup-realms.sh` | Provisionierung beider Realms über die Admin-API. Idempotent; `--recreate` baut von null |
 | `check-setup.sh` | prüft die Konfiguration Punkt für Punkt, rein lesend, Exit-Code 1 bei Lücken |
+| `test-chain.sh` | Verhaltens-Regressionstest der Kette, 12 Fälle, rein lesend, Exit-Code 1 bei Abweichung |
 | `SETUP.md` | die Erklärung: Aufbau, Token-Claims, Stolperfallen, Troubleshooting |
 | `docs/Interner-Token-Exchange.md` | erste Stufe der Kette im Detail: interner Token Exchange über ein Gateway, ohne zweiten Keycloak |
 | `requested-tenant-mapper/` | Custom Protocol Mapper 1: leitet den `tenant`-Claim in token2 aus dem `domain`-Claim des subject_token (token1) ab (Docker-Build) |
 | `selfservice-exchange-gate/` | Custom Protocol Mapper (Gate): setzt die Backend-`aud` in token2 nur, wenn token1 im aktiven Mandanten die Rolle `selfservice` trägt (Docker-Build) |
 | `booking-restriction-mapper/` | Custom Protocol Mapper 2: verengt token3 auf die im `scope`-Claim der Assertion gebuchten Dienste (Docker-Build) |
-| `docs/buchungen.csv` | Beispiel-Buchungsdaten (Mandant → Service), Zwischenlösung nur fürs Frontend/BFF |
+| `docs/buchungen.csv` | Beispiel-Buchungsdaten (Mandant → Service), Platzhalter für die spätere Buchungs-DB; liest nur das Frontend/BFF, nie Keycloak |
 | `docs/Mapper2-Spezifikation.md` | Spezifikation + gemessener Nachweis von Mapper 2 |
 | `docs/Mapper2-Recherche.md` | Quellcode-Belege (Keycloak 26.7.0) zur Machbarkeit von Mapper 2 |
 | `docs/keycloak-fallstricke.md` | Kurzliste der Stolperfallen, die real Zeit gekostet haben |
@@ -89,15 +95,16 @@ Admin-Konsolen: <http://localhost:8080> und <http://localhost:8181>, jeweils `ad
 
 ## Anpassen
 
-Beide Skripte lesen ihre Werte aus Umgebungsvariablen, die Defaults stehen im Kopf der Dateien:
+Alle drei Skripte lesen ihre Werte aus Umgebungsvariablen, die Defaults stehen im Kopf der Dateien:
 
 ```bash
 DOMAIN=domain-1234 ./setup-realms.sh
 FE=http://localhost:8080 BE=http://localhost:8181 ./check-setup.sh
 ```
 
-Wer die Ziel-Dienste ändern will, passt das Array `SERVICES` in beiden Skripten an
-(`name:rolle,rolle`).
+Wer die Ziel-Dienste ändern will, passt das Array `SERVICES` in `setup-realms.sh` und
+`check-setup.sh` an (`name:rolle,rolle`); `test-chain.sh` kennt die beiden Dienste samt erwarteten
+Rollen fest (`SVC_A`/`SVC_B`) und muss dann mit angepasst werden.
 
 ## Zurücksetzen
 

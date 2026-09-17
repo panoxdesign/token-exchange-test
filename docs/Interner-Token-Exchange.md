@@ -226,6 +226,9 @@ passiert, wenn man den Zuschnitt weglässt:
 | G6 | `audience=gibts-nicht` | 400 `invalid_client` — „Audience not found" | `audience` wird zu einem existierenden Client aufgelöst; eine unbekannte ID scheitert, bevor überhaupt gefiltert wird |
 | G7 | User mit Rolle **nur** auf `domain-5678`, Exchange auf `domain-1234` | 400 `invalid_request` — „Requested audience not available: domain-1234"; derselbe User bekommt für `domain-5678` ein normales Token | der Preis des Rollen-Wegs, direkt gemessen: fehlende Berechtigung endet im Fehler, nicht in einem Token mit leerem `resource_access` |
 
+Gegenprobe G4 läuft automatisiert als Fall T12 in [`../test-chain.sh`](../test-chain.sh), der
+Fall „zwei Domain-Scopes gleichzeitig" (`scope=domain-5678 domain-1234`) als T11.
+
 ## Stolperfallen / Troubleshooting
 
 - **`Account is not fully set up` bei leerer `requiredActions`-Liste.** Ursache ist das deklarative
