@@ -81,6 +81,7 @@ Admin-Konsolen: <http://localhost:8080> und <http://localhost:8181>, jeweils `ad
 | `check-setup.sh` | prüft die Konfiguration Punkt für Punkt, rein lesend, Exit-Code 1 bei Lücken |
 | `test-chain.sh` | Verhaltens-Regressionstest der Kette, 12 Fälle, rein lesend, Exit-Code 1 bei Abweichung |
 | `SETUP.md` | die Erklärung: Aufbau, Token-Claims, Stolperfallen, Troubleshooting |
+| `docs/Confluence-Dokumentation.md` | eigenständige Darstellung für Confluence: Problem, Ziel, Mechanik, Lösung, Trade-offs; PlantUML-Diagramme, bewusst ohne Querverweise ins Repo |
 | `docs/Interner-Token-Exchange.md` | erste Stufe der Kette im Detail: interner Token Exchange über ein Gateway, ohne zweiten Keycloak |
 | `requested-tenant-mapper/` | Custom Protocol Mapper 1: leitet den `tenant`-Claim in token2 aus dem `domain`-Claim des subject_token (token1) ab (Docker-Build) |
 | `selfservice-exchange-gate/` | Custom Protocol Mapper (Gate): setzt die Backend-`aud` in token2 nur, wenn token1 im aktiven Mandanten die Rolle `selfservice` trägt (Docker-Build) |
